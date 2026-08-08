@@ -1,13 +1,21 @@
-import { useState } from "react";
-import { calculateCompensation } from "../api/client";
+import { useEffect, useState } from "react";
+import { calculateCompensation, listPlayers } from "../api/client";
 
 export default function Compensation() {
+  const [players, setPlayers] = useState([]);
   const [playerId, setPlayerId] = useState("");
   const [minutesPlayed, setMinutesPlayed] = useState(32);
   const [intensityPct, setIntensityPct] = useState(1.1);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    listPlayers().then((data) => {
+      setPlayers(data);
+      if (data.length > 0) setPlayerId(data[0].id);
+    });
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -33,15 +41,21 @@ export default function Compensation() {
 
       <form onSubmit={handleSubmit} className="space-y-4 mb-8">
         <label className="flex flex-col text-sm text-gray-300">
-          Player ID (uuid)
-          <input
-            type="text"
+          Speler
+          <select
             required
             value={playerId}
             onChange={(e) => setPlayerId(e.target.value)}
-            placeholder="6114f7b8-0b77-4464-bbd7-2b5347591e09"
-            className="mt-1 bg-gray-800 text-white rounded-md px-3 py-2 font-mono text-sm"
-          />
+            className="mt-1 bg-gray-800 text-white rounded-md px-3 py-2"
+          >
+            {players.length === 0 && <option value="">Nog geen spelers</option>}
+            {players.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.jersey_number != null ? `#${p.jersey_number} ` : ""}
+                {p.first_name} {p.last_name}
+              </option>
+            ))}
+          </select>
         </label>
         <div className="flex gap-4">
           <label className="flex flex-col text-sm text-gray-300 flex-1">

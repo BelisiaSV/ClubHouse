@@ -3,7 +3,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import MasTest, Player
+from app.deps import get_current_user
+from app.models import MasTest, Player, User
 from app.schemas import CompensationRequest, CompensationResponse
 from app.services.mas_compensation import calculate_hit_compensation
 
@@ -11,9 +12,13 @@ router = APIRouter(prefix="/mas", tags=["mas"])
 
 
 @router.post("/compensation", response_model=CompensationResponse)
-def compensation(payload: CompensationRequest, db: Session = Depends(get_db)):
+def compensation(
+    payload: CompensationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     player = db.get(Player, payload.player_id)
-    if player is None:
+    if player is None or player.club_id != current_user.club_id:
         raise HTTPException(status_code=404, detail="Player not found")
 
     latest_mas = db.scalar(

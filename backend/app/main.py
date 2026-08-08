@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import mas
+from app.routers import auth, clubs, mas, players
 
-app = FastAPI(title="ClubHouse Football SaaS API", version="0.2.0")
+app = FastAPI(title="ClubHouse Football SaaS API", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -13,6 +13,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
+app.include_router(clubs.router)
+app.include_router(players.router)
 app.include_router(mas.router)
 
 

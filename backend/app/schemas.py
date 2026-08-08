@@ -1,103 +1,27 @@
-from datetime import date
+import uuid
 
-from pydantic import BaseModel, ConfigDict, Field
-
-
-# ---- Player ----
-class PlayerBase(BaseModel):
-    name: str
-    position: str | None = None
-    mas_score: float = Field(gt=0, description="Maximal Aerobic Speed in m/s")
+from pydantic import BaseModel, Field
 
 
-class PlayerCreate(PlayerBase):
-    pass
-
-
-class PlayerOut(PlayerBase):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-
-
-# ---- Match ----
-class MatchBase(BaseModel):
-    player_id: int
-    match_date: date
-    minutes_played: int = Field(ge=0, le=120)
-    opponent: str | None = None
-    competition: str | None = None
-
-
-class MatchCreate(MatchBase):
-    pass
-
-
-class MatchOut(MatchBase):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-
-
-# ---- RPE ----
-class RPEBase(BaseModel):
-    player_id: int
-    entry_date: date
-    rpe_value: int = Field(ge=0, le=10)
-    duration_minutes: int = Field(ge=0)
-
-
-class RPECreate(RPEBase):
-    pass
-
-
-class RPEOut(RPEBase):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    load: int
-
-
-# ---- Cycle ----
-class CycleBase(BaseModel):
-    player_id: int | None = None
-    name: str
-    phase: str | None = None
-    start_date: date
-    end_date: date
-
-
-class CycleCreate(CycleBase):
-    pass
-
-
-class CycleOut(CycleBase):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-
-
-# ---- Compensation training ----
 class CompensationRequest(BaseModel):
-    playerId: int
-    matchMinutes: int = Field(ge=0, le=120, description="Minutes the player actually played in the match")
+    player_id: uuid.UUID
+    minutes_played: float = Field(ge=0, le=90, description="Effectief gespeelde minuten in de wedstrijd")
+    intensity_pct: float = Field(default=1.10, gt=0, description="Doelintensiteit t.o.v. MAS (1.10 = 110%)")
 
 
 class CompensationResponse(BaseModel):
-    playerId: int
-    masScore: float
-    matchMinutes: int
-    minutesMissed: int
-    targetSpeedMs: float = Field(description="Prescribed running speed, 110% of MAS, in m/s")
-    intervalWorkSeconds: int
-    intervalRestSeconds: int
-    repetitions: int
-    totalDistanceMeters: float
-    totalRunningDurationMinutes: float
-    totalSessionDurationMinutes: float
-
-
-# ---- Wellness / ACWR ----
-class WellnessResponse(BaseModel):
-    playerId: int
-    acuteLoad7d: float
-    chronicLoad28d: float
-    acwr: float | None
-    flag: str  # "green" | "orange" | "red" | "insufficient_data"
-    message: str
+    player_id: uuid.UUID
+    player_name: str
+    mas_kmh: float
+    mas_test_date: str
+    minutes_played: float
+    intensity_pct: float
+    target_speed_kmh: float
+    target_speed_ms: float
+    total_work_time_min: float
+    total_reps: int
+    blocks: int
+    reps_per_block: int
+    distance_per_rep_m: float
+    total_distance_m: float
+    protocol_description: str

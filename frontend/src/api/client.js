@@ -24,6 +24,12 @@ export const login = (email, password) => {
 
 export const getMe = () => client.get("/api/auth/me").then((res) => res.data);
 
+export const forgotPassword = (email) =>
+  client.post("/api/auth/forgot-password", { email }).then((res) => res.data);
+
+export const resetPassword = (token, newPassword) =>
+  client.post("/api/auth/reset-password", { token, new_password: newPassword }).then((res) => res.data);
+
 // ---- Club (whitelabel branding) ----
 export const getMyClub = () => client.get("/api/clubs/me").then((res) => res.data);
 export const updateMyClub = (payload) => client.patch("/api/clubs/me", payload).then((res) => res.data);

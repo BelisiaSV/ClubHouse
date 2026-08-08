@@ -1,14 +1,36 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.email import send_password_reset_email
+from app.core.security import (
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES,
+    create_access_token,
+    generate_password_reset_token,
+    hash_password,
+    hash_reset_token,
+    verify_password,
+)
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import Club, User, UserRole
-from app.schemas import RegisterRequest, TokenResponse, UserOut
+from app.models import Club, PasswordResetToken, User, UserRole
+from app.schemas import (
+    ForgotPasswordRequest,
+    MessageResponse,
+    RegisterRequest,
+    ResetPasswordRequest,
+    TokenResponse,
+    UserOut,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+GENERIC_FORGOT_PASSWORD_MESSAGE = (
+    "Als dit e-mailadres bij ons bekend is, hebben we een link om je wachtwoord te "
+    "resetten verstuurd."
+)
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
@@ -54,3 +76,47 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 @router.get("/me", response_model=UserOut)
 def me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@router.post("/forgot-password", response_model=MessageResponse)
+def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    """Always returns the same generic message, whether or not the email is known,
+    so this endpoint can't be used to enumerate registered accounts."""
+    user = db.query(User).filter_by(email=payload.email).first()
+    if user is not None and user.is_active:
+        raw_token, token_hash = generate_password_reset_token()
+        db.add(
+            PasswordResetToken(
+                user_id=user.id,
+                token_hash=token_hash,
+                expires_at=datetime.now(timezone.utc)
+                + timedelta(minutes=PASSWORD_RESET_TOKEN_EXPIRE_MINUTES),
+            )
+        )
+        db.commit()
+        send_password_reset_email(user.email, raw_token)
+
+    return MessageResponse(message=GENERIC_FORGOT_PASSWORD_MESSAGE)
+
+
+@router.post("/reset-password", response_model=MessageResponse)
+def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
+    token_hash = hash_reset_token(payload.token)
+    reset_token = db.query(PasswordResetToken).filter_by(token_hash=token_hash).first()
+
+    now = datetime.now(timezone.utc)
+    if reset_token is None or reset_token.used_at is not None or reset_token.expires_at < now:
+        raise HTTPException(status_code=400, detail="Ongeldige of verlopen resetlink")
+
+    user = db.get(User, reset_token.user_id)
+    user.hashed_password = hash_password(payload.new_password)
+    reset_token.used_at = now
+
+    # Invalidate any other outstanding reset tokens for this user.
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user.id,
+        PasswordResetToken.used_at.is_(None),
+    ).update({"used_at": now})
+
+    db.commit()
+    return MessageResponse(message="Wachtwoord succesvol gewijzigd.")

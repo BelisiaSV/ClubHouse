@@ -51,6 +51,16 @@ JWT-based, scoped by `club_id` on every request via `app/deps.get_current_user`:
   its first `head_coach` user in one step, returns an access token
 - `POST /api/auth/login` — OAuth2 password flow (`username` = email), returns an access token
 - `GET /api/auth/me` — current user
+- `POST /api/auth/forgot-password` — always returns the same generic message (no account
+  enumeration); if the email matches an active user, generates a single-use token (30 min
+  expiry, only its SHA-256 hash is stored) and emails a `/reset-password?token=...` link
+- `POST /api/auth/reset-password` — sets a new password given a valid, unused, unexpired
+  token; the token and any other outstanding tokens for that user are invalidated afterwards
+
+Emailing goes through `app/core/email.py`: if `SMTP_HOST` is set it sends real SMTP mail,
+otherwise it logs the message (including the reset link) to the server console — so the whole
+flow works out of the box in dev without mail credentials, and picks up real delivery the
+moment SMTP env vars are set.
 
 All `/api/players/*`, `/api/clubs/me`, and `/mas/compensation` requests require
 `Authorization: Bearer <token>` and are scoped to the caller's club — a coach can only ever
@@ -101,7 +111,8 @@ Runs on http://localhost:5173, proxying `/mas/*` and `/api/*` to `http://localho
 `vite.config.js` — kept to just those two prefixes on purpose, since a broader proxy rule like
 `/players` would shadow the frontend's own `/players` route on direct navigation/refresh).
 
-Pages: `/login`, `/register` (club + coach signup), and behind `ProtectedRoute`: `/`
+Pages: `/login` (with a "wachtwoord vergeten?" link), `/register` (club + coach signup),
+`/forgot-password`, `/reset-password?token=...`, and behind `ProtectedRoute`: `/`
 (Compensation, with a player picker), `/players` (list, single add, template download/upload),
 `/settings` (whitelabel branding). `AuthContext` holds the JWT (localStorage) and the current
 user/club; the navbar re-colors itself from the club's `primary_color`.

@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
 
 export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
@@ -28,6 +29,11 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-gray-950 px-4">
       <form onSubmit={handleSubmit} className="w-full max-w-sm bg-gray-800 rounded-lg p-6 space-y-4">
         <h1 className="text-xl font-bold text-white">Inloggen</h1>
+        {location.state?.resetSuccess && (
+          <p className="text-emerald-400 text-sm">
+            Wachtwoord succesvol gewijzigd. Log in met je nieuwe wachtwoord.
+          </p>
+        )}
         <label className="flex flex-col text-sm text-gray-300">
           E-mailadres
           <input
@@ -56,12 +62,14 @@ export default function Login() {
         >
           {submitting ? "Bezig…" : "Inloggen"}
         </button>
-        <p className="text-sm text-gray-400">
-          Nog geen club?{" "}
+        <div className="flex items-center justify-between text-sm text-gray-400">
           <Link to="/register" className="text-emerald-400 hover:underline">
             Registreer je club
           </Link>
-        </p>
+          <Link to="/forgot-password" className="text-emerald-400 hover:underline">
+            Wachtwoord vergeten?
+          </Link>
+        </div>
       </form>
     </div>
   );

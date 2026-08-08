@@ -1,9 +1,15 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import auth, clubs, mas, players
 
-app = FastAPI(title="ClubHouse Football SaaS API", version="0.3.0")
+logging.getLogger("clubhouse.email").setLevel(logging.INFO)
+if not logging.getLogger("clubhouse.email").handlers:
+    logging.getLogger("clubhouse.email").addHandler(logging.StreamHandler())
+
+app = FastAPI(title="ClubHouse Football SaaS API", version="0.4.0")
 
 app.add_middleware(
     CORSMiddleware,

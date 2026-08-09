@@ -51,9 +51,12 @@ JWT-based, scoped by `club_id` on every request via `app/deps.get_current_user`:
   its first `head_coach` user in one step, returns an access token
 - `POST /api/auth/login` — OAuth2 password flow (`username` = email), returns an access token
 - `GET /api/auth/me` — current user
-- `POST /api/auth/forgot-password` — always returns the same generic message (no account
-  enumeration); if the email matches an active user, generates a single-use token (30 min
-  expiry, only its SHA-256 hash is stored) and emails a `/reset-password?token=...` link
+- `POST /api/auth/forgot-password` — rate-limited to **3 requests per email per rolling 24h**
+  (tracked by the normalized email itself, not by user, so the rate-limit response can't be
+  used to distinguish real from unregistered accounts either); returns HTTP 429 with a Dutch
+  notification once exceeded. Under the limit, always returns the same generic message (no
+  account enumeration); if the email matches an active user, generates a single-use token
+  (30 min expiry, only its SHA-256 hash is stored) and emails a `/reset-password?token=...` link
 - `POST /api/auth/reset-password` — sets a new password given a valid, unused, unexpired
   token; the token and any other outstanding tokens for that user are invalidated afterwards
 

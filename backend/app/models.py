@@ -141,6 +141,21 @@ class PasswordResetToken(Base):
 
 
 # =========================================================
+# PASSWORD RESET RATE LIMITING
+# =========================================================
+class PasswordResetAttempt(Base):
+    """One row per /forgot-password call, keyed by the normalized email — regardless
+    of whether that email belongs to an account. Tracking by raw email (not user_id)
+    keeps the rate limit itself from leaking account existence."""
+
+    __tablename__ = "password_reset_attempts"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    email: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+# =========================================================
 # PLAYERS
 # =========================================================
 class Player(Base):

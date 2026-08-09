@@ -15,7 +15,7 @@ from app.core.security import (
 )
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import Club, PasswordResetToken, User, UserRole
+from app.models import Club, PasswordResetAttempt, PasswordResetToken, User, UserRole
 from app.schemas import (
     ForgotPasswordRequest,
     MessageResponse,
@@ -30,6 +30,15 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 GENERIC_FORGOT_PASSWORD_MESSAGE = (
     "Als dit e-mailadres bij ons bekend is, hebben we een link om je wachtwoord te "
     "resetten verstuurd."
+)
+
+# Rate limit: max requests per email within a rolling 24h window (not calendar day,
+# so it can't be gamed by sending 3 just before and 3 just after midnight).
+MAX_FORGOT_PASSWORD_ATTEMPTS_PER_DAY = 3
+FORGOT_PASSWORD_WINDOW = timedelta(hours=24)
+RATE_LIMIT_MESSAGE = (
+    "Je hebt het maximum van 3 aanvragen voor dit e-mailadres vandaag al bereikt. "
+    "Probeer het morgen opnieuw."
 )
 
 
@@ -81,19 +90,38 @@ def me(current_user: User = Depends(get_current_user)):
 @router.post("/forgot-password", response_model=MessageResponse)
 def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
     """Always returns the same generic message, whether or not the email is known,
-    so this endpoint can't be used to enumerate registered accounts."""
+    so this endpoint can't be used to enumerate registered accounts.
+
+    Rate-limited to MAX_FORGOT_PASSWORD_ATTEMPTS_PER_DAY per email, tracked by the
+    raw email string rather than by user_id, so the rate-limit response itself
+    doesn't leak whether the account exists."""
+    normalized_email = payload.email.strip().lower()
+    now = datetime.now(timezone.utc)
+
+    recent_attempts = db.query(PasswordResetAttempt).filter(
+        PasswordResetAttempt.email == normalized_email,
+        PasswordResetAttempt.requested_at >= now - FORGOT_PASSWORD_WINDOW,
+    ).count()
+    if recent_attempts >= MAX_FORGOT_PASSWORD_ATTEMPTS_PER_DAY:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=RATE_LIMIT_MESSAGE)
+
+    db.add(PasswordResetAttempt(email=normalized_email))
+
     user = db.query(User).filter_by(email=payload.email).first()
+    raw_token = None
     if user is not None and user.is_active:
         raw_token, token_hash = generate_password_reset_token()
         db.add(
             PasswordResetToken(
                 user_id=user.id,
                 token_hash=token_hash,
-                expires_at=datetime.now(timezone.utc)
-                + timedelta(minutes=PASSWORD_RESET_TOKEN_EXPIRE_MINUTES),
+                expires_at=now + timedelta(minutes=PASSWORD_RESET_TOKEN_EXPIRE_MINUTES),
             )
         )
-        db.commit()
+
+    db.commit()
+
+    if raw_token is not None:
         send_password_reset_email(user.email, raw_token)
 
     return MessageResponse(message=GENERIC_FORGOT_PASSWORD_MESSAGE)

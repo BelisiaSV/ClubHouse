@@ -102,6 +102,29 @@ curl -X POST http://localhost:8000/mas/compensation \
   -d '{"player_id": "<uuid>", "minutes_played": 32, "intensity_pct": 1.10}'
 ```
 
+### Periodization / MAS dashboard panels
+
+`app/services/` also holds a pure, DB-free service layer split out of the club's
+`football_periodization_services.py` — one module per dashboard panel, all built on the same
+shared `WeekFocus` / `CycleWeek` / `TrainingCycle` dataclasses (defined once, in
+`periodization.py`, and imported by the other four):
+
+| Service module | Router (`app/routers/`) | Prefix | What it does |
+|---|---|---|---|
+| `periodization.py` | `periodization.py` | `/api/periodization` | Build a training cycle (`build_cycle`); reschedule it when the target match is postponed (`handle_match_cancellation`) — shifts the remaining weeks and injects recovery weeks so there's no training gap |
+| `mas_testing.py` | `mas_testing.py` | `/api/mas-testing` | When a player's next MAS (re)test is due, and the training-zone speeds (% MAS) derived from a MAS score |
+| `makeup_programs.py` | `makeup_programs.py` | `/api/makeup-programs` | The "Maak schema's" button: generates individual catch-up running programs for missed match minutes and/or missed trainings |
+| `team_readiness.py` | `team_readiness.py` | `/api/team-readiness` | ACWR + wellness-based player flags (overload/underload/poor recovery/injured), and a team training proposal (duration + km) scaled to squad readiness |
+| `volume_planning.py` | `volume_planning.py` | `/api/volume-planning` | Weekly km target per cycle phase, split between match load and training load |
+
+Because the services are pure functions with no database access, every router endpoint takes
+the full input it needs in the request body (e.g. the whole `TrainingCycle`, not just an id) and
+returns the computed result — nothing is persisted. `app/schemas_dashboards.py` holds the
+Pydantic request/response contracts, with `CycleWeekSchema`/`TrainingCycleSchema` shared across
+all five routers the same way the dataclasses are shared across the five services. All
+endpoints require `Authorization: Bearer <token>` like the rest of the API. See `/docs` for the
+full request/response shape of each endpoint.
+
 ## Frontend
 
 ```bash

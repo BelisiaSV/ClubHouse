@@ -10,6 +10,26 @@ client.interceptors.request.use((config) => {
   return config;
 });
 
+// A 401 from a protected endpoint means the token is missing/expired: clear it
+// and send the coach back to the login screen instead of failing silently in
+// the console. Auth endpoints themselves (wrong password, etc.) are excluded
+// so their 401s stay inline form errors instead of triggering a redirect.
+client.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error.response?.status;
+    const url = error.config?.url || "";
+    const isAuthEndpoint = url.includes("/api/auth/login") || url.includes("/api/auth/register");
+    if (status === 401 && !isAuthEndpoint) {
+      localStorage.removeItem("access_token");
+      if (!window.location.pathname.startsWith("/login")) {
+        window.location.href = "/login";
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 // ---- Auth ----
 export const register = (payload) => client.post("/api/auth/register", payload).then((res) => res.data);
 
@@ -51,7 +71,7 @@ export const importPlayers = (file) => {
     .then((res) => res.data);
 };
 
-// ---- MAS compensation ----
+// ---- MAS compensation (single player, manual) ----
 export const calculateCompensation = (playerId, minutesPlayed, intensityPct = 1.1) =>
   client
     .post("/mas/compensation", {
@@ -59,6 +79,22 @@ export const calculateCompensation = (playerId, minutesPlayed, intensityPct = 1.
       minutes_played: minutesPlayed,
       intensity_pct: intensityPct,
     })
+    .then((res) => res.data);
+
+// ---- Matches / MAS compensation panel ----
+export const listMatches = () => client.get("/api/matches").then((res) => res.data);
+
+export const createMatch = (payload) => client.post("/api/matches", payload).then((res) => res.data);
+
+export const getMatchPlayers = (matchId) =>
+  client.get(`/api/matches/${matchId}/players`).then((res) => res.data);
+
+export const updateMatchPlayer = (matchId, playerId, payload) =>
+  client.patch(`/api/matches/${matchId}/players/${playerId}`, payload).then((res) => res.data);
+
+export const generateForMatch = (matchId) =>
+  client
+    .post("/api/makeup-programs/generate-for-match", { match_id: matchId })
     .then((res) => res.data);
 
 export default client;

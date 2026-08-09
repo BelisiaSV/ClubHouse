@@ -35,7 +35,10 @@ added on top (`alembic/versions/2255d9e9e637_*.py`):
   and `date_of_birth`/`position` were relaxed to nullable so bulk import doesn't require them
 - **mas_tests** — time-series MAS (Maximal Aerobic Speed) tests per player; `current_mas` is a
   DB view exposing the latest test per player
-- **matches** / **match_minutes** — matches and the per-player minutes/GPS junction table
+- **matches** / **match_minutes** — matches and the per-player minutes/GPS junction table;
+  `match_minutes.selection_status` (`basis`/`bank`/`niet_geselecteerd`) drives the quick-select
+  dropdown on the MAS compensation panel, while `minutes_played` stays the source of truth for
+  compensation math
 - **rpe_wellness_data** — daily session-RPE + wellness monitoring; `session_load` is a Postgres
   generated column (`rpe_score * session_duration_min`, Foster's sRPE)
 - **training_cycles** / **training_cycle_weeks** — periodization cycles and their weekly focus
@@ -84,6 +87,17 @@ see or modify their own club's data.
   returns `{created, skipped, errors: [{row, message}]}` so invalid rows are reported without
   failing the whole batch
 
+### Matches (`/api/matches`)
+
+- `GET /api/matches` — club's matches, most recent first
+- `POST /api/matches` — create a match (opponent, date, home/away, competition)
+- `GET /api/matches/{id}/players` — every active club player merged with their `match_minutes`
+  row for that match (defaulting to `basis`/90' for anyone without one yet) and their latest
+  MAS score
+- `PATCH /api/matches/{id}/players/{player_id}` — upsert a player's status/minutes for that
+  match; `minutes_played` is derived from `selection_status` (basis→90, bank/niet
+  geselecteerd→0) when not explicitly overridden
+
 ### `POST /mas/compensation`
 
 Exposes `calculate_hit_compensation()` (`app/services/mas_compensation.py`, ported from the
@@ -125,6 +139,19 @@ all five routers the same way the dataclasses are shared across the five service
 endpoints require `Authorization: Bearer <token>` like the rest of the API. See `/docs` for the
 full request/response shape of each endpoint.
 
+Two endpoints add a DB-backed layer on top of that pure-calculator design, for the MAS
+compensation panel:
+
+- `POST /api/periodization/cycles` also persists its result as the club's one active cycle
+  (`training_cycles`/`training_cycle_weeks`, deactivating any previous one) so it can be looked
+  up later without the frontend re-sending it.
+- `POST /api/makeup-programs/generate-for-match` — the panel's "Maak schema's" button. Takes
+  only `match_id`; server-side it resolves the club's active cycle and the week covering today,
+  builds candidates from every player under the 60' threshold (using their latest MAS test and
+  `match_minutes` for that match), and calls the same `generate_makeup_schedules()` used by the
+  plain `/generate` endpoint. Returns `400` with a clear message if there's no active cycle or
+  no week covering today, and lists any under-threshold players skipped for lacking a MAS test.
+
 ## Frontend
 
 ```bash
@@ -138,10 +165,21 @@ Runs on http://localhost:5173, proxying `/mas/*` and `/api/*` to `http://localho
 `/players` would shadow the frontend's own `/players` route on direct navigation/refresh).
 
 Pages: `/login` (with a "wachtwoord vergeten?" link), `/register` (club + coach signup),
-`/forgot-password`, `/reset-password?token=...`, and behind `ProtectedRoute`: `/`
-(Compensation, with a player picker), `/players` (list, single add, template download/upload),
-`/settings` (whitelabel branding). `AuthContext` holds the JWT (localStorage) and the current
-user/club; the navbar re-colors itself from the club's `primary_color`.
+`/forgot-password`, `/reset-password?token=...`, and behind `ProtectedRoute`: `/` (the MAS
+compensation panel), `/matches` (match calendar), `/players` (list, single add, template
+download/upload), `/settings` (whitelabel branding). `AuthContext` holds the JWT (localStorage)
+and the current user/club; the navbar re-colors itself from the club's `primary_color`.
+
+`/` is the MAS compensation panel (ported from a Claude Design mockup, wired to the endpoints
+above through `src/api/client.js` — no direct `fetch()` calls in the component): a match
+selector populated from `GET /api/matches`; a per-player table (status + exact-minutes
+dropdowns, each saving on change via `PATCH /api/matches/{id}/players/{player_id}` with a
+per-row ✓/error+retry indicator — a native `<select>`'s `onChange` only fires once per choice,
+which already gives "save on close, not per keystroke" for free); and a "Maak schema's" button
+that calls `POST /api/makeup-programs/generate-for-match` with just the match id. A `400` (no
+active cycle) renders as an inline explanation, not a silent failure; a `401` is handled
+globally by an axios response interceptor that clears the token and redirects to `/login`. No
+matches yet → an empty state links to `/matches` to add one.
 
 ## Running both
 

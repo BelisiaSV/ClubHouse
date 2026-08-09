@@ -20,7 +20,10 @@ export default function Navbar() {
         {user && (
           <>
             <NavLink to="/" end className={linkClass}>
-              Compensation
+              MAS-paneel
+            </NavLink>
+            <NavLink to="/matches" className={linkClass}>
+              Wedstrijden
             </NavLink>
             <NavLink to="/players" className={linkClass}>
               Spelers

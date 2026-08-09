@@ -4,6 +4,7 @@ import ProtectedRoute from "./components/ProtectedRoute.jsx";
 import Compensation from "./pages/Compensation.jsx";
 import ForgotPassword from "./pages/ForgotPassword.jsx";
 import Login from "./pages/Login.jsx";
+import Matches from "./pages/Matches.jsx";
 import Players from "./pages/Players.jsx";
 import Register from "./pages/Register.jsx";
 import ResetPassword from "./pages/ResetPassword.jsx";
@@ -32,6 +33,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Players />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/matches"
+            element={
+              <ProtectedRoute>
+                <Matches />
               </ProtectedRoute>
             }
           />

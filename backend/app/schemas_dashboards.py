@@ -7,11 +7,16 @@ compensation) so each concern's schema surface stays a manageable size,
 mirroring the split of app/services/football_periodization_services.py
 into one module per dashboard panel.
 
-These services are pure/DB-free (see app/services/periodization.py docstring),
-so every schema here is a plain input/output contract — nothing is persisted.
-Each "Schema" class mirrors a service dataclass 1:1 and can convert to/from it.
+These services are pure/DB-free (see app/services/periodization.py docstring):
+every schema here is a plain input/output contract mirroring a service
+dataclass 1:1, convertible to/from it via to_dataclass()/from_attributes.
+Two router endpoints add a DB-backed layer on top without changing that:
+POST /api/periodization/cycles persists its result as the club's active
+cycle, and POST /api/makeup-programs/generate-for-match looks that cycle
+back up server-side instead of taking it from the request body.
 """
 
+import uuid
 from datetime import date
 from typing import Literal, Optional
 
@@ -150,6 +155,21 @@ class GeneratedRunningProgramSchema(BaseModel):
     structure_description: str
     total_duration_min: float
     total_distance_m: float
+
+
+class GenerateForMatchRequest(BaseModel):
+    match_id: uuid.UUID
+
+
+class SkippedCandidate(BaseModel):
+    player_name: str
+    reason: str
+
+
+class GenerateForMatchResponse(BaseModel):
+    context_label: str
+    programs: list[GeneratedRunningProgramSchema]
+    skipped: list[SkippedCandidate]
 
 
 # ---- team_readiness.py router ----

@@ -251,6 +251,9 @@ class MatchMinutes(Base):
     player_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
     club_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("clubs.id", ondelete="CASCADE"), nullable=False)
     minutes_played: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # UI-facing quick status behind the minutes dropdown on the MAS compensation panel;
+    # minutes_played is always the source of truth for compensation math.
+    selection_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="basis")
     started_match: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     substituted_in_min: Mapped[int | None] = mapped_column(Integer)
     substituted_out_min: Mapped[int | None] = mapped_column(Integer)
@@ -261,7 +264,13 @@ class MatchMinutes(Base):
     top_speed_kmh: Mapped[float | None] = mapped_column(Numeric(4, 2))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
-    __table_args__ = (UniqueConstraint("match_id", "player_id", name="match_minutes_match_id_player_id_key"),)
+    __table_args__ = (
+        UniqueConstraint("match_id", "player_id", name="match_minutes_match_id_player_id_key"),
+        CheckConstraint(
+            "selection_status in ('basis','bank','niet_geselecteerd')",
+            name="match_minutes_selection_status_check",
+        ),
+    )
 
     match: Mapped["Match"] = relationship(back_populates="match_minutes")
     player: Mapped["Player"] = relationship(back_populates="match_minutes")

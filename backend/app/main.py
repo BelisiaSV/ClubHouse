@@ -9,6 +9,7 @@ from app.routers import (
     makeup_programs,
     mas,
     mas_testing,
+    matches,
     periodization,
     players,
     team_readiness,
@@ -19,7 +20,7 @@ logging.getLogger("clubhouse.email").setLevel(logging.INFO)
 if not logging.getLogger("clubhouse.email").handlers:
     logging.getLogger("clubhouse.email").addHandler(logging.StreamHandler())
 
-app = FastAPI(title="ClubHouse Football SaaS API", version="0.5.0")
+app = FastAPI(title="ClubHouse Football SaaS API", version="0.6.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,6 +33,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(clubs.router)
 app.include_router(players.router)
+app.include_router(matches.router)
 app.include_router(mas.router)
 app.include_router(periodization.router)
 app.include_router(mas_testing.router)

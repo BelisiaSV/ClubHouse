@@ -14,6 +14,7 @@ from app.routers import (
     periodization,
     players,
     team_readiness,
+    training_sessions,
     volume_planning,
 )
 
@@ -42,6 +43,7 @@ app.include_router(makeup_programs.router)
 app.include_router(team_readiness.router)
 app.include_router(volume_planning.router)
 app.include_router(calendar.router)
+app.include_router(training_sessions.router)
 
 
 @app.get("/api/health")

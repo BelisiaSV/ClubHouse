@@ -255,6 +255,12 @@ class ProposeTrainingRequest(BaseModel):
 class TrainingProposalSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    # Set after persisting the proposal as a TrainingSession row (see
+    # app/routers/team_readiness.py) — None on the bare dataclass, filled in
+    # via model_copy(update=...) once the DB row exists. This is "the
+    # already-existing session" app/routers/training_sessions.py's
+    # composition-proposal/vorm-target endpoints act on by id.
+    session_id: Optional[uuid.UUID] = None
     week_focus: WeekFocus
     suggested_session_type: str
     intensity_pct_mas_low: float
@@ -273,6 +279,48 @@ class GenerateKmPlanRequest(BaseModel):
     cycle: TrainingCycleSchema
     avg_match_distance_km: float = 10.5
     min_recovery_km_per_training: float = 3.0
+
+
+# ---- training_sessions.py router (oefenvormen) ----
+class SessionCompositionRequest(BaseModel):
+    num_players: int
+
+
+class VormTargetSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    vorm: str
+    label: str
+    duration_min: float
+    distance_km: float
+    intensity_pct_mas_low: float
+    intensity_pct_mas_high: float
+    notes: str
+
+
+class SessionCompositionProposalSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    week_focus: WeekFocus
+    num_players: int
+    target_duration_min: float
+    target_distance_km: float
+    blocks: list[VormTargetSchema]
+    total_duration_min: float
+    total_distance_km: float
+    deviation_note: str
+
+
+class VormTargetRequest(BaseModel):
+    # vorm is a plain str (not the OefenvormType enum) and duration_min/
+    # num_players carry no Pydantic-level bounds on purpose: all three are
+    # validated inside services.session_composition.calculate_vorm_target()
+    # (plus an explicit num_players check in the router), so every rejection
+    # comes back as a clear 400 with a Dutch message instead of a generic
+    # 422 from FastAPI's own request validation.
+    vorm: str
+    duration_min: float
+    num_players: int
 
 
 class WeeklyKmPlanSchema(BaseModel):

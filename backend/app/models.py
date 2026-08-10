@@ -431,3 +431,24 @@ class CalendarEventPlayer(Base):
     player_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
 
     event: Mapped["CalendarEvent"] = relationship(back_populates="players")
+
+
+# =========================================================
+# TRAINING SESSIONS (oefenvormen: composition proposal / vorm-target)
+# =========================================================
+class TrainingSession(Base):
+    """A single planned training session's duur/afstanddoel, persisted so
+    app/routers/training_sessions.py's composition-proposal and vorm-target
+    endpoints can be called against it by id across separate requests instead
+    of the frontend re-sending the whole proposal. Created as a side effect
+    of POST /api/team-readiness/propose-training (see that router) — that's
+    "the already-existing session" the two oefenvormen endpoints act on."""
+
+    __tablename__ = "training_sessions"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    club_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("clubs.id", ondelete="CASCADE"), nullable=False)
+    week_focus: Mapped[WeekFocus] = mapped_column(week_focus_enum, nullable=False)
+    target_duration_min: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
+    target_distance_km: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))

@@ -51,6 +51,10 @@ added on top (`alembic/versions/2255d9e9e637_*.py`):
   cycle round-trips cleanly into the `services.periodization.TrainingCycle` dataclass (needed to
   reconstruct a club's `Season`); the one pre-existing cycle was backfilled with its `end_date`
   as a synthetic default.
+- **training_sessions** — one row per training proposal from `POST /api/team-readiness/
+  propose-training` (`week_focus` + the readiness-adjusted duration/distance target), so a coach's
+  later oefenvormen choices (see "Oefenvormen" below) can reference it by id instead of the
+  frontend re-sending the whole proposal.
 
 Migrations live in `alembic/versions/`. The initial migration also creates the `uuid-ossp`
 extension and the `current_mas` view (not auto-detected by `--autogenerate`).
@@ -150,6 +154,7 @@ shared `WeekFocus` / `CycleWeek` / `TrainingCycle` dataclasses (defined once, in
 | `makeup_programs.py` | `makeup_programs.py` | `/api/makeup-programs` | The "Maak schema's" button: generates individual catch-up running programs for missed match minutes and/or missed trainings |
 | `team_readiness.py` | `team_readiness.py` | `/api/team-readiness` | ACWR + wellness-based player flags (overload/underload/poor recovery/injured), and a team training proposal (duration + km) scaled to squad readiness |
 | `volume_planning.py` | `volume_planning.py` | `/api/volume-planning` | Weekly km target per cycle phase, split between match load and training load |
+| `session_composition.py` | `training_sessions.py` | `/api/training-sessions` | "AI physical coach" for session content: translates a session's abstract duration/distance target into concrete, recognizable oefenvormen (`propose_session_composition`), or lets the coach price out one specific oefenvorm they pick from a menu (`calculate_vorm_target`) |
 
 Because the services are pure functions with no database access, every router endpoint takes
 the full input it needs in the request body (e.g. the whole `TrainingCycle`, not just an id) and
@@ -214,6 +219,35 @@ the fresh set; past rows are left untouched as history. It runs both on demand
 (`POST /sync-calendar`) and automatically after every `POST /record`, which is what keeps the
 calendar showing the current projection instead of a stale one once a real result changes a
 player's baseline.
+
+### Oefenvormen (`/api/training-sessions`)
+
+`POST /api/team-readiness/propose-training` now also persists its result as a `training_sessions`
+row (`week_focus` + the readiness-adjusted `target_duration_min`/`target_distance_km`) and
+returns its id as `session_id` — "the already-existing session" the two endpoints below act on,
+so a coach's later choices don't need to re-send the whole proposal:
+
+- `GET/POST /api/training-sessions/{session_id}/composition-proposal` — calls
+  `services.session_composition.propose_session_composition()` with the session's stored
+  `week_focus`/duration/distance target and a coach-supplied `num_players` (`?num_players=` query
+  param on `GET`, `{"num_players": …}` body on `POST` — both routes share one handler). Returns a
+  full session breakdown: an ordered list of oefenvorm blocks (each with its own duration,
+  expected distance, and %MAS intensity band, scaled by squad size for player-count-sensitive
+  vormen like SSG/MSG/LSG/transitie) plus a `deviation_note` comparing the proposal's total
+  distance to the session's actual km target.
+- `POST /api/training-sessions/{session_id}/vorm-target` — body: `{vorm, duration_min,
+  num_players}`. Calls `calculate_vorm_target()` for that one oefenvorm and returns its expected
+  duration/distance/intensity band. Meant to be called every time a coach picks a vorm from the
+  dropdown and types a duration, e.g. while building out a session block by block. `session_id` is
+  only used to keep the call tenant-scoped (404 for another club's session) — the computation
+  itself only depends on the request body.
+
+Both endpoints return a clear `400` (never FastAPI's generic `422`) for an unknown oefenvorm key
+or `num_players <= 0` — `vorm` and `num_players` are accepted as plain, unconstrained types in the
+request schemas specifically so every rejection routes through
+`services.session_composition`'s own `ValueError`s (plus one explicit `num_players` check in the
+router for `vorm-target`, since `calculate_vorm_target()` doesn't validate that itself) instead of
+Pydantic's request validation.
 
 ## Frontend
 

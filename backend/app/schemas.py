@@ -125,6 +125,14 @@ class PlayerImportResult(BaseModel):
     errors: list[PlayerImportError]
 
 
+class WeeklyDistanceOut(BaseModel):
+    player_id: uuid.UUID
+    week_number: int
+    match_distance_km: float
+    training_distance_km: float
+    total_km: float
+
+
 # ---- MAS compensation ----
 class CompensationRequest(BaseModel):
     player_id: uuid.UUID

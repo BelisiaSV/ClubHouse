@@ -359,3 +359,37 @@ class TrainingCycleWeek(Base):
     )
 
     training_cycle: Mapped["TrainingCycle"] = relationship(back_populates="weeks")
+
+
+# =========================================================
+# PLAYER WEEKLY DISTANCE LOG
+# =========================================================
+class PlayerWeeklyDistanceLog(Base):
+    """One row per (match, player): the player's estimated match distance for
+    that appearance, auto-populated from match_minutes via
+    services.volume_planning.populate_match_distance_for_week() whenever the
+    coach saves that player's minutes — see app/routers/matches.py. Attributed
+    to a specific training_cycle_id/week_number so club_id + week_number stays
+    unambiguous across cycles. training_distance_km is reserved for a future
+    "actually completed training" log; there's no such tracking yet, so it's
+    always 0 for now."""
+
+    __tablename__ = "player_weekly_distance_log"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    club_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("clubs.id", ondelete="CASCADE"), nullable=False)
+    player_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("players.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    match_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), nullable=False)
+    training_cycle_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("training_cycles.id", ondelete="CASCADE"), nullable=False
+    )
+    week_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    match_distance_km: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False, server_default="0")
+    training_distance_km: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+    __table_args__ = (
+        UniqueConstraint("match_id", "player_id", name="player_weekly_distance_log_match_id_player_id_key"),
+    )

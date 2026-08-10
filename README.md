@@ -42,6 +42,9 @@ added on top (`alembic/versions/2255d9e9e637_*.py`):
 - **rpe_wellness_data** — daily session-RPE + wellness monitoring; `session_load` is a Postgres
   generated column (`rpe_score * session_duration_min`, Foster's sRPE)
 - **training_cycles** / **training_cycle_weeks** — periodization cycles and their weekly focus
+- **player_weekly_distance_log** — one row per `(match_id, player_id)`, auto-populated when
+  match minutes are saved (see `PATCH /api/matches/{id}/players/{player_id}` above); pinned to
+  a `training_cycle_id` so `week_number` stays unambiguous across cycles
 
 Migrations live in `alembic/versions/`. The initial migration also creates the `uuid-ossp`
 extension and the `current_mas` view (not auto-detected by `--autogenerate`).
@@ -96,7 +99,18 @@ see or modify their own club's data.
   MAS score
 - `PATCH /api/matches/{id}/players/{player_id}` — upsert a player's status/minutes for that
   match; `minutes_played` is derived from `selection_status` (basis→90, bank/niet
-  geselecteerd→0) when not explicitly overridden
+  geselecteerd→0) when not explicitly overridden. As a background step of this same save (no
+  separate coach action), it also auto-populates that player's estimated match distance for the
+  cycle week the match falls in — `calculate_player_match_distance()` /
+  `populate_match_distance_for_week()` in `app/services/volume_planning.py`, upserted into
+  `player_weekly_distance_log` keyed by `(match_id, player_id)` so re-saving minutes corrects
+  the same row instead of accumulating duplicates. Silently skipped (never blocks the minutes
+  save) if the player has no position set, or the club has no active cycle/no cycle week covers
+  the match date.
+- `GET /api/players/{id}/weekly-distance?week_number=N` — that player's summed
+  `match_distance_km` (from the log above) + `training_distance_km` (reserved for a future
+  "actually completed training" log — there's no such tracking yet, so always 0) for one week of
+  the club's active cycle, for showing next to a position's km target on the frontend.
 
 ### `POST /mas/compensation`
 

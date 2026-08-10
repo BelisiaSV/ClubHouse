@@ -2,16 +2,24 @@ import io
 import uuid
 
 import openpyxl
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl.styles import Font
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import Player, User
-from app.schemas import PlayerCreate, PlayerImportError, PlayerImportResult, PlayerOut, PlayerUpdate
+from app.models import Player, PlayerWeeklyDistanceLog, User
+from app.models import TrainingCycle as DbTrainingCycle
+from app.schemas import (
+    PlayerCreate,
+    PlayerImportError,
+    PlayerImportResult,
+    PlayerOut,
+    PlayerUpdate,
+    WeeklyDistanceOut,
+)
 
 router = APIRouter(prefix="/api/players", tags=["players"])
 
@@ -128,6 +136,54 @@ def get_player(player_id: uuid.UUID, current_user: User = Depends(get_current_us
     if player is None or player.club_id != current_user.club_id:
         raise HTTPException(status_code=404, detail="Player not found")
     return player
+
+
+@router.get("/{player_id}/weekly-distance", response_model=WeeklyDistanceOut)
+def get_weekly_distance(
+    player_id: uuid.UUID,
+    week_number: int = Query(ge=1),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Summed match_distance_km (auto-logged when match minutes are saved, see
+    app/routers/matches.py) + training_distance_km (reserved for a future
+    completed-training log; always 0 for now) for one player in one week of
+    the club's currently active cycle — for showing next to a position's km
+    target on the frontend."""
+    player = db.get(Player, player_id)
+    if player is None or player.club_id != current_user.club_id:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    active_cycle = db.scalar(
+        select(DbTrainingCycle).where(
+            DbTrainingCycle.club_id == current_user.club_id, DbTrainingCycle.is_active.is_(True)
+        )
+    )
+    if active_cycle is None:
+        return WeeklyDistanceOut(
+            player_id=player_id, week_number=week_number, match_distance_km=0.0,
+            training_distance_km=0.0, total_km=0.0,
+        )
+
+    totals = db.execute(
+        select(
+            func.coalesce(func.sum(PlayerWeeklyDistanceLog.match_distance_km), 0),
+            func.coalesce(func.sum(PlayerWeeklyDistanceLog.training_distance_km), 0),
+        ).where(
+            PlayerWeeklyDistanceLog.player_id == player_id,
+            PlayerWeeklyDistanceLog.training_cycle_id == active_cycle.id,
+            PlayerWeeklyDistanceLog.week_number == week_number,
+        )
+    ).one()
+    match_distance_km, training_distance_km = float(totals[0]), float(totals[1])
+
+    return WeeklyDistanceOut(
+        player_id=player_id,
+        week_number=week_number,
+        match_distance_km=match_distance_km,
+        training_distance_km=training_distance_km,
+        total_km=round(match_distance_km + training_distance_km, 2),
+    )
 
 
 @router.patch("/{player_id}", response_model=PlayerOut)

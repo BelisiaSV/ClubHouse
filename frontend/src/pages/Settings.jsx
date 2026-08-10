@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { updateMyClub } from "../api/client";
+import { queueNextCycle, updateMyClub } from "../api/client";
 import { useAuth } from "../context/AuthContext.jsx";
 
 export default function Settings() {
@@ -11,6 +11,37 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState(false);
+
+  const [cycleName, setCycleName] = useState("");
+  const [cycleLengthWeeks, setCycleLengthWeeks] = useState(4);
+  const [cycleTargetMatchDate, setCycleTargetMatchDate] = useState("");
+  const [queueing, setQueueing] = useState(false);
+  const [queueError, setQueueError] = useState(null);
+  const [queueConfirmation, setQueueConfirmation] = useState(null);
+
+  const handleQueueNextCycle = async (e) => {
+    e.preventDefault();
+    setQueueing(true);
+    setQueueError(null);
+    setQueueConfirmation(null);
+    try {
+      const cycle = await queueNextCycle({
+        length_weeks: Number(cycleLengthWeeks),
+        target_match_date: cycleTargetMatchDate,
+        name: cycleName || null,
+      });
+      // A repeat call while the active cycle is still running overwrites the
+      // already-queued (not yet started) next cycle instead of erroring — so
+      // this is always a confirmation, never an error state on retry.
+      setQueueConfirmation(
+        `Instelling bijgewerkt: '${cycle.name}' (${cycle.length_weeks}w) staat klaar vanaf ${cycle.start_date}.`
+      );
+    } catch (err) {
+      setQueueError(err.response?.data?.detail ?? err.message);
+    } finally {
+      setQueueing(false);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -96,6 +127,60 @@ export default function Settings() {
           className="text-white px-4 py-2 rounded-md disabled:opacity-50"
         >
           {saving ? "Bezig…" : "Opslaan"}
+        </button>
+      </form>
+
+      <h2 className="text-xl font-bold text-white mt-10 mb-1">Cyclusplanning</h2>
+      <p className="text-sm text-gray-400 mb-6">
+        Stel de eerstvolgende trainingscyclus in. De actieve, lopende cyclus wordt hier nooit
+        door aangeraakt — je kan van gedachte veranderen over de klaargezette volgende cyclus
+        zolang die nog niet gestart is.
+      </p>
+
+      <form onSubmit={handleQueueNextCycle} className="space-y-4 bg-gray-800 rounded-lg p-4">
+        <label className="flex flex-col text-sm text-gray-300">
+          Naam (optioneel)
+          <input
+            type="text"
+            value={cycleName}
+            onChange={(e) => setCycleName(e.target.value)}
+            placeholder="bv. Competitieblok 2"
+            className="mt-1 bg-gray-900 text-white rounded-md px-3 py-2"
+          />
+        </label>
+        <label className="flex flex-col text-sm text-gray-300">
+          Lengte
+          <select
+            value={cycleLengthWeeks}
+            onChange={(e) => setCycleLengthWeeks(e.target.value)}
+            className="mt-1 bg-gray-900 text-white rounded-md px-3 py-2"
+          >
+            <option value={4}>4 weken</option>
+            <option value={6}>6 weken</option>
+            <option value={8}>8 weken</option>
+          </select>
+        </label>
+        <label className="flex flex-col text-sm text-gray-300">
+          Doelwedstrijddatum
+          <input
+            type="date"
+            value={cycleTargetMatchDate}
+            onChange={(e) => setCycleTargetMatchDate(e.target.value)}
+            required
+            className="mt-1 bg-gray-900 text-white rounded-md px-3 py-2"
+          />
+        </label>
+
+        {queueError && <p className="text-red-400 text-sm">{queueError}</p>}
+        {queueConfirmation && <p className="text-emerald-400 text-sm">{queueConfirmation}</p>}
+
+        <button
+          type="submit"
+          disabled={queueing}
+          style={{ backgroundColor: primaryColor }}
+          className="text-white px-4 py-2 rounded-md disabled:opacity-50"
+        >
+          {queueing ? "Bezig…" : "Volgende cyclus instellen"}
         </button>
       </form>
     </div>

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Optional
 
-from app.services.periodization import TrainingCycle, WeekFocus
+from app.services.periodization import Season, TrainingCycle, WeekFocus
 
 MIN_INTERVAL_WEEKS = 4      # nooit vaker testen dan dit
 MAX_INTERVAL_WEEKS = 6      # bovengrens: hoe lang een MAS-score "geldig" blijft
@@ -80,6 +80,101 @@ def plan_next_mas_test(
 
 
 @dataclass
+class MASTestCalendarEvent:
+    """Eén te plannen teamtestmoment, voor de kalender."""
+    event_date: date
+    player_names: list
+    label: str
+
+
+def _next_required_test_date_in_season(last_test_date: date, season: Season, from_date: date):
+    """
+    Zelfde regel als plan_next_mas_test(), maar zoekt over ALLE cyclussen
+    van het seizoen heen in plaats van binnen één cyclus — nodig om
+    testmomenten te kunnen projecteren tot het einde van het seizoen,
+    ook als die in een cyclus liggen die nu nog niet actief/klaargezet is.
+    """
+    all_weeks = [w for cycle in season.cycles for w in cycle.weeks]
+    upcoming_key_week = next(
+        (w for w in all_weeks if w.week_start_date >= from_date
+         and w.focus in (WeekFocus.INTENSIFICATION, WeekFocus.REALIZATION)),
+        None,
+    )
+    candidates, reasons = [], []
+    if upcoming_key_week is not None:
+        gap_weeks = (upcoming_key_week.week_start_date - last_test_date).days / 7
+        if gap_weeks >= MIN_INTERVAL_WEEKS:
+            candidates.append(upcoming_key_week.week_start_date - timedelta(days=3))
+            reasons.append(f"Vóór {upcoming_key_week.focus.value}-week ({upcoming_key_week.week_start_date}).")
+    max_deadline = last_test_date + timedelta(weeks=MAX_INTERVAL_WEEKS)
+    candidates.append(max_deadline)
+    reasons.append(f"Testscore verloopt na {MAX_INTERVAL_WEEKS} weken.")
+    next_date = min(candidates)
+    return next_date, reasons[candidates.index(next_date)]
+
+
+def project_season_mas_test_events(
+    season: Season,
+    players_last_test: dict,      # {player_name: last_test_date | None}
+    today: date,
+    group_window_days: int = 3,
+) -> list:
+    """
+    Projecteert ALLE vereiste MAS-testmomenten tot het einde van het
+    seizoen — niet enkel de eerstvolgende. Dit is wat de kalender in één
+    keer moet vullen met 'MAS-test'-items over alle resterende cyclussen,
+    in plaats van dat er telkens pas ná een effectieve test een nieuw
+    kalender-item verschijnt.
+
+    Werkwijze per speler: vertrek van de laatst gekende testdatum, bepaal
+    de volgende vereiste datum (_next_required_test_date_in_season), ga
+    ervan uit dat de coach die haalt, en herhaal tot het einde van het
+    seizoen. Dit is een PROJECTIE — als een test effectief later gebeurt
+    dan gepland, moet deze functie opnieuw aangeroepen worden om de
+    resterende kalender-items bij te stellen (geen eenmalige, statische
+    berekening).
+    """
+    if not season.cycles:
+        return []
+    season_end = season.cycles[-1].end_date()
+
+    player_dates = {}
+    for name, last_test_date in players_last_test.items():
+        dates = []
+        if last_test_date is None:
+            # Nooit getest -> baseline-test is ONMIDDELLIJK vereist (zelfde regel
+            # als plan_next_mas_test), dus het eerste projectiepunt is vandaag.
+            dates.append(today)
+            cursor_last_test = today
+            search_from = today + timedelta(days=1)
+        else:
+            cursor_last_test = last_test_date
+            search_from = today
+        for _ in range(50):  # veiligheidslimiet tegen oneindige lus
+            next_date, _reason = _next_required_test_date_in_season(cursor_last_test, season, search_from)
+            if next_date > season_end:
+                break
+            dates.append(next_date)
+            cursor_last_test = next_date          # aanname: coach test tijdig op deze datum
+            search_from = next_date + timedelta(days=1)
+        player_dates[name] = dates
+
+    all_dates = sorted({d for dates in player_dates.values() for d in dates})
+    events, used_dates = [], set()
+    for d in all_dates:
+        if d in used_dates:
+            continue
+        grouped_players = [name for name, dates in player_dates.items()
+                            if any(0 <= (dd - d).days <= group_window_days for dd in dates)]
+        events.append(MASTestCalendarEvent(
+            event_date=d, player_names=grouped_players,
+            label=f"MAS-test ({len(grouped_players)} speler(s))",
+        ))
+        used_dates.add(d)
+    return events
+
+
+@dataclass
 class TrainingZone:
     name: str
     pct_mas_low: float
@@ -109,3 +204,136 @@ def recalculate_training_zones(mas_kmh: float) -> list:
                      typical_use=use)
         for name, low, high, use in ZONE_DEFINITIONS
     ]
+
+
+# --- 2.5 MAS-TESTPROTOCOLLEN: bibliotheek waaruit de trainer kiest --------
+# Vier veldtesten die voor amateurvoetbal haalbaar zijn, elk met eigen
+# afweging tussen nauwkeurigheid, benodigdheden en voetbalspecificiteit
+# (richtingsveranderingen). 'result_label' beschrijft wat de trainer exact
+# invoert; 'correction_factor' vertaalt dat resultaat naar een MAS-score
+# (1.0 = resultaat IS de MAS, geen omrekening nodig).
+
+@dataclass
+class MASTestProtocol:
+    key: str
+    name: str
+    description: str
+    equipment: list           # benodigdheden
+    how_to_administer: str
+    result_label: str         # wat de trainer invoert
+    correction_factor: float  # vermenigvuldigingsfactor naar MAS
+
+
+MAS_TEST_PROTOCOLS = {
+    "vameval": MASTestProtocol(
+        key="vameval",
+        name="VAMEVAL",
+        description=(
+            "Continue, geleidelijk oplopende looptest op een rond parcours (bv. 400m-piste). "
+            "Geldt als een van de meest betrouwbare en eenvoudig te organiseren MAS-testen, "
+            "en is geschikt om een hele groep tegelijk te testen omdat iedereen zichtbaar blijft."
+        ),
+        equipment=["Piste of vlak parcours (veelvoud van 20m, bv. 400m)", "Pionnen om de 20m",
+                   "Audiosignaal/app met het officiële VAMEVAL-protocol (geen willekeurige "
+                   "internet-soundtrack — die komen vaak niet meer overeen met het huidige protocol)"],
+        how_to_administer=(
+            "Spelers lopen van pion naar pion (elke 20m) en moeten elke pion bereiken op het "
+            "moment van het geluidssignaal. Gestart wordt aan ±8 km/u, de snelheid stijgt elke "
+            "minuut met 0.5 km/u. De test stopt voor een speler zodra hij 2 keer een pion niet "
+            "op tijd bereikt. De MAS is de snelheid van het laatst volledig afgewerkte niveau."
+        ),
+        result_label="Laatst volledig afgewerkte snelheid (km/u)",
+        correction_factor=1.0,
+    ),
+    "30-15-ift": MASTestProtocol(
+        key="30-15-ift",
+        name="30-15 Intermittent Fitness Test (30-15 IFT)",
+        description=(
+            "Intermitterende shuttle-test (30s lopen, 15s pauze) over een 40m-parcours, met "
+            "richtingsveranderingen — daardoor het meest voetbalspecifiek van de vier testen, "
+            "omdat het niet enkel de aerobe capaciteit maar ook het herstel tussen inspanningen "
+            "en de wendbaarheid mee test."
+        ),
+        equipment=["40m rechte lijn (vrij, bv. een deel van het veld of een zaal)",
+                   "Pionnen op 0m, 20m en 40m", "Audiosignaal/app met het 30-15 IFT-protocol"],
+        how_to_administer=(
+            "Spelers lopen heen en terug over de 40m in blokken van 30s inspanning gevolgd door "
+            "15s passief herstel, telkens gestuurd door het geluidssignaal. Start aan 8 km/u, "
+            "+0.5 km/u per blok van 30s. De test stopt bij vrijwillige uitputting of wanneer een "
+            "speler 2 keer na elkaar de lijn niet op tijd bereikt. Het resultaat is VIFT (snelheid "
+            "van het laatst volledig afgewerkte blok) — dit is NIET rechtstreeks de MAS: door het "
+            "intermitterende karakter ligt VIFT hoger dan de werkelijke MAS. Het platform herleidt "
+            "dit automatisch naar een geschatte MAS."
+        ),
+        result_label="VIFT — laatst volledig afgewerkte snelheid (km/u)",
+        correction_factor=0.87,  # Buchheit & Laursen (2013): 85-90% van VIFT als MAS-schatting
+    ),
+    "umtt": MASTestProtocol(
+        key="umtt",
+        name="Université de Montréal Track Test (Léger-Boucher)",
+        description=(
+            "Continue looptest op de piste, gelijkaardig aan VAMEVAL maar met iets grotere "
+            "snelheidsstappen — een goed alternatief als er geen VAMEVAL-audiobestand "
+            "beschikbaar is, met vergelijkbare benodigdheden."
+        ),
+        equipment=["Piste of vlak parcours (veelvoud van 50m aanbevolen)", "Pionnen om de 50m",
+                   "Audiosignaal/app met het UMTT-protocol"],
+        how_to_administer=(
+            "Zelfde opzet als VAMEVAL: spelers lopen continu rond het parcours en moeten elke "
+            "pion op het geluidssignaal bereiken, met een geleidelijk oplopende snelheid per "
+            "minuut. De MAS is de snelheid van het laatst volledig afgewerkte niveau."
+        ),
+        result_label="Laatst volledig afgewerkte snelheid (km/u)",
+        correction_factor=1.0,
+    ),
+    "shuttle-20m": MASTestProtocol(
+        key="shuttle-20m",
+        name="20m Shuttle Run (Léger-test / 'beeptest')",
+        description=(
+            "De bekendste en meest toegankelijke test — vraagt het minste aan materiaal en "
+            "ruimte, maar is fysiek belastender voor de benen door de vele keerbewegingen op "
+            "20m, en licht minder nauwkeurig dan VAMEVAL door de grotere snelheidssprongen."
+        ),
+        equipment=["20m vrije ruimte (bv. een zaal of deel van het veld)", "Pionnen op beide uiteinden",
+                   "Audiosignaal/app met het Léger 20m-shuttlerunprotocol"],
+        how_to_administer=(
+            "Spelers lopen heen en terug over 20m, telkens op het geluidssignaal. De snelheid "
+            "stijgt per niveau (ongeveer elke minuut). De test stopt wanneer een speler 2 keer "
+            "na elkaar de lijn niet op tijd bereikt. De MAS is de snelheid van het laatst "
+            "volledig afgewerkte niveau."
+        ),
+        result_label="Laatst volledig afgewerkte snelheid (km/u)",
+        correction_factor=1.0,
+    ),
+}
+
+
+@dataclass
+class MASTestRecord:
+    player_name: str
+    protocol_key: str
+    protocol_name: str
+    test_date: date
+    raw_result_kmh: float
+    mas_kmh: float
+
+
+def record_mas_test(player_name: str, protocol_key: str, raw_result_kmh: float, test_date: date) -> MASTestRecord:
+    """
+    Verwerkt een ingegeven testresultaat naar een MAS-score, met de juiste
+    correctiefactor voor het gekozen protocol. Dit is wat er gebeurt zodra
+    de trainer een resultaat ingeeft/uploadt — ook voor de allereerste
+    (baseline) test van een speler.
+    """
+    if protocol_key not in MAS_TEST_PROTOCOLS:
+        raise ValueError(f"Onbekend testprotocol: {protocol_key}")
+    if raw_result_kmh <= 0:
+        raise ValueError("Testresultaat moet groter zijn dan 0.")
+
+    protocol = MAS_TEST_PROTOCOLS[protocol_key]
+    mas_kmh = round(raw_result_kmh * protocol.correction_factor, 2)
+
+    return MASTestRecord(
+        player_name=player_name, protocol_key=protocol_key, protocol_name=protocol.name,
+        test_date=test_date, raw_result_kmh=raw_result_kmh, mas_kmh=mas_kmh,
+    )

@@ -45,6 +45,12 @@ added on top (`alembic/versions/2255d9e9e637_*.py`):
 - **player_weekly_distance_log** — one row per `(match_id, player_id)`, auto-populated when
   match minutes are saved (see `PATCH /api/matches/{id}/players/{player_id}` above); pinned to
   a `training_cycle_id` so `week_number` stays unambiguous across cycles
+- **calendar_events** / **calendar_event_players** — club calendar items; only `event_type =
+  'mas_test'` is populated so far, kept in sync with the season's MAS-test projection (see
+  "MAS-test calendar projection" below). `training_cycles.target_match_date` was added so a DB
+  cycle round-trips cleanly into the `services.periodization.TrainingCycle` dataclass (needed to
+  reconstruct a club's `Season`); the one pre-existing cycle was backfilled with its `end_date`
+  as a synthetic default.
 
 Migrations live in `alembic/versions/`. The initial migration also creates the `uuid-ossp`
 extension and the `current_mas` view (not auto-detected by `--autogenerate`).
@@ -153,7 +159,7 @@ all five routers the same way the dataclasses are shared across the five service
 endpoints require `Authorization: Bearer <token>` like the rest of the API. See `/docs` for the
 full request/response shape of each endpoint.
 
-Two endpoints add a DB-backed layer on top of that pure-calculator design, for the MAS
+Several endpoints add a DB-backed layer on top of that pure-calculator design, for the MAS
 compensation panel:
 
 - `POST /api/periodization/cycles` also persists its result as the club's one active cycle
@@ -165,6 +171,49 @@ compensation panel:
   `match_minutes` for that match), and calls the same `generate_makeup_schedules()` used by the
   plain `/generate` endpoint. Returns `400` with a clear message if there's no active cycle or
   no week covering today, and lists any under-threshold players skipped for lacking a MAS test.
+- `POST /api/periodization/cycles/queue-next` — the Settings "Cyclusplanning" weekselector. Sets
+  the club's *next* cycle without ever touching the currently active, running one. Calling it
+  again while that active cycle is still running **overwrites the already-queued (not yet
+  started) next cycle in place** — same start date, new length/target/name — instead of
+  returning a `400`; this lets a coach change their mind about a cycle before it starts. Server-
+  side, `app/routers/periodization.py::load_season_from_db()` reconstructs a full `Season` from
+  the club's `training_cycles` rows (ordered by `start_date`, DB `is_active` flag deliberately
+  ignored — see `Season.get_active_cycle_and_week`'s docstring on never trusting a static
+  activeness column) before calling `services.periodization.queue_next_cycle()`; whether that
+  call appended a new cycle or overwrote the season's last one decides an `INSERT` vs `UPDATE`
+  against `training_cycles`/`training_cycle_weeks`. Newly queued cycles are stored with
+  `is_active=False`, so this never interferes with the `is_active=True` lookups the rest of the
+  app still uses for "the" active cycle.
+- `GET /api/mas-testing/protocols` — the four MAS field-test protocols a coach can choose from
+  (VAMEVAL, 30-15 IFT, UMTT, 20m shuttle run), each with equipment, how-to-administer notes, and
+  the `correction_factor` used to convert a raw result into a MAS score.
+- `POST /api/mas-testing/record` — the "MAS-test invoeren" action on `/players`. Takes a
+  `player_id`, `protocol_key`, raw result, and test date; converts it to a MAS score via
+  `services.mas_testing.record_mas_test()` and stores it as a new `mas_tests` row. Immediately
+  re-syncs the MAS-test calendar (see below) so any projected test dates depending on this
+  player's new baseline update right away, and returns how many calendar events were
+  (re)written.
+- `POST /api/mas-testing/sync-calendar` — standalone trigger for the same calendar (re)sync, in
+  case it ever needs to be run outside of recording a result.
+- `GET /api/calendar/events?event_type=mas_test&from_date=…` — reads the club's calendar items
+  (`app/routers/calendar.py`); currently only `mas_test` is populated. Powers the "Aankomende
+  MAS-testen" list on `/matches`.
+
+### MAS-test calendar projection
+
+`services.mas_testing.project_season_mas_test_events()` projects **every** MAS test a club's
+players will need for the rest of the season — not just the next one — grouping players whose
+required dates fall within `group_window_days` of each other into a single calendar event
+(fewer separate team test sessions to organize). It's explicitly a re-runnable *projection*, not
+a one-time schedule: if a coach tests later or earlier than planned, the remaining projected
+dates need to shift too. `app/routers/mas_testing.py::_sync_mas_test_calendar()` is the DB-backed
+wrapper that makes that automatic — it rebuilds the projection from the club's current cycles and
+every active player's latest `mas_tests` row, then wholesale-replaces the club's not-yet-past
+`calendar_events` rows of type `mas_test` (`is_projected=True` and `event_date >= today`) with
+the fresh set; past rows are left untouched as history. It runs both on demand
+(`POST /sync-calendar`) and automatically after every `POST /record`, which is what keeps the
+calendar showing the current projection instead of a stale one once a real result changes a
+player's baseline.
 
 ## Frontend
 
@@ -180,9 +229,15 @@ Runs on http://localhost:5173, proxying `/mas/*` and `/api/*` to `http://localho
 
 Pages: `/login` (with a "wachtwoord vergeten?" link), `/register` (club + coach signup),
 `/forgot-password`, `/reset-password?token=...`, and behind `ProtectedRoute`: `/` (the MAS
-compensation panel), `/matches` (match calendar), `/players` (list, single add, template
-download/upload), `/settings` (whitelabel branding). `AuthContext` holds the JWT (localStorage)
-and the current user/club; the navbar re-colors itself from the club's `primary_color`.
+compensation panel), `/matches` (match calendar plus an "Aankomende MAS-testen" list from
+`GET /api/calendar/events`), `/players` (list, single add, template download/upload, and a
+per-player "MAS-test invoeren" action that calls `POST /api/mas-testing/record`), `/settings`
+(whitelabel branding plus a "Cyclusplanning" weekselector calling
+`POST /api/periodization/cycles/queue-next` — a repeat submission while the active cycle is
+still running just re-confirms the update, it's never rendered as an error, since the backend
+overwrites the queued cycle instead of rejecting the call). `AuthContext` holds the JWT
+(localStorage) and the current user/club; the navbar re-colors itself from the club's
+`primary_color`.
 
 `/` is the MAS compensation panel (ported from a Claude Design mockup, wired to the endpoints
 above through `src/api/client.js` — no direct `fetch()` calls in the component): a match

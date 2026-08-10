@@ -1,10 +1,26 @@
-import { useEffect, useRef, useState } from "react";
-import { createPlayer, downloadImportTemplate, importPlayers, listPlayers } from "../api/client";
+import { Fragment, useEffect, useRef, useState } from "react";
+import {
+  createPlayer,
+  downloadImportTemplate,
+  getMasTestProtocols,
+  importPlayers,
+  listPlayers,
+  recordMasTest,
+} from "../api/client";
 
 export default function Players() {
   const [players, setPlayers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  const [protocols, setProtocols] = useState([]);
+  const [testPlayerId, setTestPlayerId] = useState(null);
+  const [testProtocolKey, setTestProtocolKey] = useState("");
+  const [testRawResult, setTestRawResult] = useState("");
+  const [testDate, setTestDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [testSubmitting, setTestSubmitting] = useState(false);
+  const [testError, setTestError] = useState(null);
+  const [testConfirmation, setTestConfirmation] = useState(null);
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [firstName, setFirstName] = useState("");
@@ -33,7 +49,42 @@ export default function Players() {
 
   useEffect(() => {
     refresh();
+    getMasTestProtocols()
+      .then((result) => {
+        setProtocols(result);
+        if (result.length > 0) setTestProtocolKey(result[0].key);
+      })
+      .catch(() => {});
   }, []);
+
+  const openTestForm = (playerId) => {
+    setTestPlayerId(playerId);
+    setTestRawResult("");
+    setTestDate(new Date().toISOString().slice(0, 10));
+    setTestError(null);
+    setTestConfirmation(null);
+  };
+
+  const handleRecordMasTest = async (e) => {
+    e.preventDefault();
+    setTestSubmitting(true);
+    setTestError(null);
+    try {
+      const result = await recordMasTest({
+        player_id: testPlayerId,
+        protocol_key: testProtocolKey,
+        raw_result_kmh: Number(testRawResult),
+        test_date: testDate,
+      });
+      setTestConfirmation(
+        `MAS-score ${result.mas_kmh} km/u opgeslagen. Kalender bijgewerkt (${result.calendar_events_synced} testmoment(en)).`
+      );
+    } catch (err) {
+      setTestError(err.response?.data?.detail ?? err.message);
+    } finally {
+      setTestSubmitting(false);
+    }
+  };
 
   const handleAddPlayer = async (e) => {
     e.preventDefault();
@@ -210,25 +261,89 @@ export default function Players() {
                 <th className="px-4 py-2">Naam</th>
                 <th className="px-4 py-2">E-mailadres</th>
                 <th className="px-4 py-2">Telefoonnummer</th>
+                <th className="px-4 py-2">MAS-test</th>
               </tr>
             </thead>
             <tbody>
               {players.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-4 text-center text-gray-500">
+                  <td colSpan={5} className="px-4 py-4 text-center text-gray-500">
                     Nog geen spelers. Voeg er een toe of importeer het sjabloon.
                   </td>
                 </tr>
               )}
               {players.map((p) => (
-                <tr key={p.id} className="border-t border-gray-700">
-                  <td className="px-4 py-2">{p.jersey_number ?? "—"}</td>
-                  <td className="px-4 py-2">
-                    {p.first_name} {p.last_name}
-                  </td>
-                  <td className="px-4 py-2">{p.email ?? "—"}</td>
-                  <td className="px-4 py-2">{p.phone_number ?? "—"}</td>
-                </tr>
+                <Fragment key={p.id}>
+                  <tr className="border-t border-gray-700">
+                    <td className="px-4 py-2">{p.jersey_number ?? "—"}</td>
+                    <td className="px-4 py-2">
+                      {p.first_name} {p.last_name}
+                    </td>
+                    <td className="px-4 py-2">{p.email ?? "—"}</td>
+                    <td className="px-4 py-2">{p.phone_number ?? "—"}</td>
+                    <td className="px-4 py-2">
+                      <button
+                        onClick={() => (testPlayerId === p.id ? setTestPlayerId(null) : openTestForm(p.id))}
+                        className="text-emerald-400 hover:text-emerald-300 text-xs"
+                      >
+                        {testPlayerId === p.id ? "Sluiten" : "MAS-test invoeren"}
+                      </button>
+                    </td>
+                  </tr>
+                  {testPlayerId === p.id && (
+                    <tr className="border-t border-gray-700 bg-gray-900/50">
+                      <td colSpan={5} className="px-4 py-3">
+                        <form onSubmit={handleRecordMasTest} className="flex flex-wrap items-end gap-3 text-sm">
+                          <label className="flex flex-col text-gray-300">
+                            Protocol
+                            <select
+                              value={testProtocolKey}
+                              onChange={(e) => setTestProtocolKey(e.target.value)}
+                              className="mt-1 bg-gray-900 text-white rounded-md px-3 py-2"
+                            >
+                              {protocols.map((protocol) => (
+                                <option key={protocol.key} value={protocol.key}>
+                                  {protocol.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="flex flex-col text-gray-300">
+                            Resultaat (km/u)
+                            <input
+                              type="number"
+                              step="0.1"
+                              min="0.1"
+                              required
+                              value={testRawResult}
+                              onChange={(e) => setTestRawResult(e.target.value)}
+                              className="mt-1 bg-gray-900 text-white rounded-md px-3 py-2 w-28"
+                            />
+                          </label>
+                          <label className="flex flex-col text-gray-300">
+                            Testdatum
+                            <input
+                              type="date"
+                              required
+                              value={testDate}
+                              onChange={(e) => setTestDate(e.target.value)}
+                              className="mt-1 bg-gray-900 text-white rounded-md px-3 py-2"
+                            />
+                          </label>
+                          <button
+                            type="submit"
+                            disabled={testSubmitting}
+                            className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white px-4 py-2 rounded-md"
+                          >
+                            {testSubmitting ? "Bezig…" : "Opslaan"}
+                          </button>
+                          {testError && <p className="text-red-400 w-full">{testError}</p>}
+                          {testConfirmation && <p className="text-emerald-400 w-full">{testConfirmation}</p>}
+                        </form>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>

@@ -97,4 +97,23 @@ export const generateForMatch = (matchId) =>
     .post("/api/makeup-programs/generate-for-match", { match_id: matchId })
     .then((res) => res.data);
 
+// ---- Periodization: weekselector ----
+export const queueNextCycle = (payload) =>
+  client.post("/api/periodization/cycles/queue-next", payload).then((res) => res.data);
+
+// ---- MAS testing: protocols, recording, calendar ----
+export const getMasTestProtocols = () =>
+  client.get("/api/mas-testing/protocols").then((res) => res.data);
+
+export const recordMasTest = (payload) =>
+  client.post("/api/mas-testing/record", payload).then((res) => res.data);
+
+export const syncMasTestCalendar = () =>
+  client.post("/api/mas-testing/sync-calendar").then((res) => res.data);
+
+export const getCalendarEvents = (eventType) =>
+  client
+    .get("/api/calendar/events", { params: eventType ? { event_type: eventType } : {} })
+    .then((res) => res.data);
+
 export default client;

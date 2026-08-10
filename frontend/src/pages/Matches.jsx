@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { createMatch, listMatches } from "../api/client";
+import { createMatch, getCalendarEvents, listMatches, listPlayers } from "../api/client";
 
 export default function Matches() {
   const navigate = useNavigate();
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  const [masTestEvents, setMasTestEvents] = useState([]);
+  const [playersById, setPlayersById] = useState({});
 
   const [showForm, setShowForm] = useState(false);
   const [opponent, setOpponent] = useState("");
@@ -29,7 +32,18 @@ export default function Matches() {
 
   useEffect(() => {
     refresh();
+    getCalendarEvents("mas_test")
+      .then(setMasTestEvents)
+      .catch(() => {});
+    listPlayers()
+      .then((players) => setPlayersById(Object.fromEntries(players.map((p) => [p.id, p]))))
+      .catch(() => {});
   }, []);
+
+  const playerLabel = (playerId) => {
+    const player = playersById[playerId];
+    return player ? `${player.first_name} ${player.last_name}` : "onbekende speler";
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -109,6 +123,24 @@ export default function Matches() {
             {submitting ? "Bezig…" : "Toevoegen"}
           </button>
         </form>
+      )}
+
+      {masTestEvents.length > 0 && (
+        <div className="bg-gray-800 rounded-lg p-4 mb-6">
+          <h2 className="text-white font-semibold mb-1">Aankomende MAS-testen</h2>
+          <p className="text-sm text-gray-400 mb-3">
+            Geprojecteerd tot het einde van het seizoen — wordt automatisch bijgewerkt zodra een
+            coach een testresultaat invoert.
+          </p>
+          <ul className="divide-y divide-gray-700">
+            {masTestEvents.map((ev) => (
+              <li key={ev.id} className="py-2 text-sm text-gray-300 flex justify-between">
+                <span>{new Date(ev.event_date).toLocaleDateString("nl-BE")}</span>
+                <span className="text-gray-400">{ev.player_ids.map(playerLabel).join(", ")}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {loading && <p className="text-gray-400">Laden…</p>}

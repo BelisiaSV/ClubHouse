@@ -329,6 +329,7 @@ class TrainingCycle(Base):
     length_type: Mapped[CycleLength] = mapped_column(cycle_length_enum, nullable=False)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    target_match_date: Mapped[date] = mapped_column(Date, nullable=False)
     target_match_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("matches.id"))
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     shift_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
@@ -393,3 +394,40 @@ class PlayerWeeklyDistanceLog(Base):
     __table_args__ = (
         UniqueConstraint("match_id", "player_id", name="player_weekly_distance_log_match_id_player_id_key"),
     )
+
+
+# =========================================================
+# CALENDAR EVENTS (currently just 'mas_test' projections)
+# =========================================================
+class CalendarEvent(Base):
+    """A club calendar item. Only event_type='mas_test' is populated so far, by
+    services.mas_testing.project_season_mas_test_events() via
+    app/routers/mas_testing.py's _sync_mas_test_calendar(). is_projected rows
+    covering today or later are wholesale replaced on every sync (see that
+    function's docstring); past rows are left alone as history."""
+
+    __tablename__ = "calendar_events"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    club_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("clubs.id", ondelete="CASCADE"), nullable=False)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    event_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    is_projected: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+    players: Mapped[list["CalendarEventPlayer"]] = relationship(
+        back_populates="event", cascade="all, delete-orphan"
+    )
+
+
+class CalendarEventPlayer(Base):
+    __tablename__ = "calendar_event_players"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    calendar_event_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("calendar_events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    player_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
+
+    event: Mapped["CalendarEvent"] = relationship(back_populates="players")

@@ -80,6 +80,13 @@ class RescheduleCycleRequest(BaseModel):
     reason: str = "winterweer"
 
 
+class QueueNextCycleRequest(BaseModel):
+    length_weeks: Literal[4, 6, 8]
+    target_match_date: date
+    target_peak_weekly_km: float = 25.0
+    name: Optional[str] = None
+
+
 # ---- mas_testing.py router ----
 class PlanNextMasTestRequest(BaseModel):
     player_name: str
@@ -109,6 +116,44 @@ class TrainingZoneSchema(BaseModel):
     speed_low_kmh: float
     speed_high_kmh: float
     typical_use: str
+
+
+class MASTestProtocolSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str
+    name: str
+    description: str
+    equipment: list[str]
+    how_to_administer: str
+    result_label: str
+    correction_factor: float
+
+
+class RecordMasTestRequest(BaseModel):
+    player_id: uuid.UUID
+    protocol_key: str
+    raw_result_kmh: float = Field(gt=0)
+    test_date: date
+
+
+class CalendarEventSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    event_type: str
+    event_date: date
+    label: str
+    is_projected: bool
+    player_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class RecordMasTestResponse(BaseModel):
+    player_id: uuid.UUID
+    mas_kmh: float
+    protocol_name: str
+    test_date: date
+    calendar_events_synced: int
 
 
 # ---- makeup_programs.py router ----

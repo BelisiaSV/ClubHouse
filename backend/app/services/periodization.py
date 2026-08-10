@@ -15,6 +15,7 @@ benodigde data op en roepen deze bouwstenen aan.
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from enum import Enum
+from typing import Optional
 
 
 # =============================================================
@@ -87,6 +88,113 @@ def build_cycle(name: str, length_weeks: int, start_date: date,
             planned_load_pct=LOAD_PCT_BY_FOCUS[focus],
         ))
     return cycle
+
+
+# --- Seizoen: aaneengeschakelde cyclussen van variabele lengte ------------
+# Een coach kan bv. een voorbereidingscyclus van 8 weken laten volgen door
+# herhaalde competitiecyclussen van 4 weken — elke nieuwe cyclus start
+# exact waar de vorige eindigt, zodat er geen gaten of overlap ontstaan.
+
+@dataclass
+class Season:
+    name: str
+    cycles: list = field(default_factory=list)   # list[TrainingCycle], op volgorde
+
+
+def add_cycle_to_season(
+    season: Season,
+    length_weeks: int,
+    target_match_date: date,
+    target_peak_weekly_km: float = 25.0,
+    name: Optional[str] = None,
+    start_date: Optional[date] = None,
+) -> TrainingCycle:
+    """
+    Voegt een nieuwe cyclus toe ná de laatste cyclus in het seizoen.
+    start_date is enkel verplicht voor de EERSTE cyclus van het seizoen;
+    daarna wordt automatisch aangesloten op cycles[-1].end_date().
+    """
+    if season.cycles:
+        resolved_start = season.cycles[-1].end_date()
+    elif start_date is not None:
+        resolved_start = start_date
+    else:
+        raise ValueError("De eerste cyclus van een seizoen vereist een expliciete start_date.")
+
+    cycle_name = name or f"Cyclus {len(season.cycles) + 1} ({length_weeks}w)"
+    cycle = build_cycle(cycle_name, length_weeks, resolved_start, target_match_date, target_peak_weekly_km)
+    season.cycles.append(cycle)
+    return cycle
+
+
+def get_active_cycle_and_week(season: Season, today: date):
+    """
+    Zoekt DYNAMISCH welke cyclus en welke week van die cyclus vandaag geldig
+    is. Dit moet bij ELKE klik op 'Maak schema's' of het 'Next training'-
+    tabblad opnieuw aangeroepen worden — nooit een cyclus/week statisch
+    doorgeven of cachen, want de coach kan een cyclus tussentijds aanpassen
+    (afgelasting, cyclus vroeger/later starten, etc.).
+
+    Geeft (cycle, week) terug, of (None, None) als vandaag buiten elke
+    cyclus in het seizoen valt (bv. een pauze tussen twee cyclussen).
+    """
+    for cycle in season.cycles:
+        if cycle.start_date <= today < cycle.end_date():
+            for i, week in enumerate(cycle.weeks):
+                next_week_start = (cycle.weeks[i + 1].week_start_date
+                                    if i + 1 < len(cycle.weeks) else cycle.end_date())
+                if week.week_start_date <= today < next_week_start:
+                    return cycle, week
+    return None, None
+
+
+def queue_next_cycle(
+    season: Season,
+    length_weeks: int,
+    target_match_date: date,
+    today: date,
+    target_peak_weekly_km: float = 25.0,
+    name: Optional[str] = None,
+) -> TrainingCycle:
+    """
+    Stelt de EERSTVOLGENDE cyclus in — via de weekselector op het dashboard.
+    De ACTIEVE, lopende cyclus wordt hier nooit door aangeraakt.
+
+    - Geen actieve cyclus? Nieuwe cyclus start vandaag (of overschrijft een
+      reeds voor vandaag klaargezette, nog niet gestarte eerste cyclus).
+    - Actieve cyclus is de laatste in de lijst (nog niets klaargezet)?
+      Nieuwe cyclus wordt toegevoegd ná het einde van de actieve cyclus.
+    - Staat er al een volgende cyclus klaar, maar is die nog NIET gestart?
+      Dan mag de coach van gedachte veranderen (misklik, andere keuze) —
+      de klaargezette cyclus wordt overschreven, met behoud van dezelfde
+      startdatum (meteen na de actieve cyclus). De actieve cyclus zelf
+      verandert hierdoor niet.
+    """
+    active_cycle, _ = get_active_cycle_and_week(season, today)
+
+    if active_cycle is None:
+        if season.cycles and season.cycles[-1].start_date > today:
+            queued = season.cycles[-1]
+            new_cycle = build_cycle(name or queued.name, length_weeks, queued.start_date,
+                                     target_match_date, target_peak_weekly_km)
+            season.cycles[-1] = new_cycle
+            return new_cycle
+        return add_cycle_to_season(season, length_weeks, target_match_date,
+                                    target_peak_weekly_km, name, start_date=today)
+
+    if season.cycles[-1] is active_cycle:
+        return add_cycle_to_season(season, length_weeks, target_match_date,
+                                    target_peak_weekly_km, name)
+
+    queued_cycle = season.cycles[-1]
+    if queued_cycle.start_date <= today:
+        # Veiligheidscheck: zou hier normaal niet voorkomen (dan zou hij actief zijn).
+        raise ValueError("De klaargezette cyclus is intussen gestart en kan niet meer aangepast worden.")
+
+    updated_cycle = build_cycle(name or queued_cycle.name, length_weeks, queued_cycle.start_date,
+                                 target_match_date, target_peak_weekly_km)
+    season.cycles[-1] = updated_cycle
+    return updated_cycle
 
 
 # =============================================================

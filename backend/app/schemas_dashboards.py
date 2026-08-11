@@ -284,6 +284,21 @@ class GenerateKmPlanRequest(BaseModel):
 # ---- training_sessions.py router (oefenvormen) ----
 class SessionCompositionRequest(BaseModel):
     num_players: int
+    team_avg_mas_kmh: Optional[float] = None
+    player_flags: Optional[list[PlayerFlagSchema]] = None
+
+
+class DryRunTopUpSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    label: str
+    reps: int
+    distance_per_rep_m: int
+    time_per_rep_s: float
+    rest_s: float
+    intensity_pct_mas: float
+    total_distance_m: float
+    instruction: str
 
 
 class VormTargetSchema(BaseModel):
@@ -295,6 +310,11 @@ class VormTargetSchema(BaseModel):
     distance_km: float
     intensity_pct_mas_low: float
     intensity_pct_mas_high: float
+    num_bouts: Optional[int] = None
+    bout_duration_min: Optional[float] = None
+    rest_between_bouts_min: Optional[float] = None
+    total_clock_time_min: float
+    format_hint: str
     notes: str
 
 
@@ -306,9 +326,11 @@ class SessionCompositionProposalSchema(BaseModel):
     target_duration_min: float
     target_distance_km: float
     blocks: list[VormTargetSchema]
-    total_duration_min: float
+    total_work_duration_min: float
+    total_clock_time_min: float
     total_distance_km: float
     deviation_note: str
+    optional_dry_run_topup: Optional[DryRunTopUpSchema] = None
 
 
 class VormTargetRequest(BaseModel):
@@ -321,6 +343,28 @@ class VormTargetRequest(BaseModel):
     vorm: str
     duration_min: float
     num_players: int
+
+
+class RecalculateCompositionRequest(BaseModel):
+    # The (possibly coach-edited) block list plus the session's km goal —
+    # summarize_composition() re-sums both from scratch, it doesn't look
+    # either up from the stored TrainingSession row.
+    blocks: list[VormTargetSchema]
+    target_distance_km: float
+    player_flags: Optional[list[PlayerFlagSchema]] = None
+
+
+class RecalculateCompositionResponse(BaseModel):
+    total_work_duration_min: float
+    total_clock_time_min: float
+    total_distance_km: float
+    deviation_pct: float
+    deviation_note: str
+
+
+class DryRunTopupRequest(BaseModel):
+    remaining_distance_km: float
+    team_avg_mas_kmh: float
 
 
 class WeeklyKmPlanSchema(BaseModel):

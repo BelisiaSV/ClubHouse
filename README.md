@@ -224,30 +224,60 @@ player's baseline.
 
 `POST /api/team-readiness/propose-training` now also persists its result as a `training_sessions`
 row (`week_focus` + the readiness-adjusted `target_duration_min`/`target_distance_km`) and
-returns its id as `session_id` — "the already-existing session" the two endpoints below act on,
-so a coach's later choices don't need to re-send the whole proposal:
+returns its id as `session_id` — "the already-existing session" the endpoints below act on, so a
+coach's later choices don't need to re-send the whole proposal.
 
-- `GET/POST /api/training-sessions/{session_id}/composition-proposal` — calls
-  `services.session_composition.propose_session_composition()` with the session's stored
-  `week_focus`/duration/distance target and a coach-supplied `num_players` (`?num_players=` query
-  param on `GET`, `{"num_players": …}` body on `POST` — both routes share one handler). Returns a
-  full session breakdown: an ordered list of oefenvorm blocks (each with its own duration,
-  expected distance, and %MAS intensity band, scaled by squad size for player-count-sensitive
-  vormen like SSG/MSG/LSG/transitie) plus a `deviation_note` comparing the proposal's total
-  distance to the session's actual km target.
+The **km target is the leading number, not the session duration**: `propose_session_composition()`
+builds a baseline block breakdown from the cycle phase's template, then rescales every block's
+duration by the same factor so the total distance lands as close as possible to the km goal
+(bounded to a 0.3-2.5x scale factor to avoid degenerate cases). Small/medium/large-sided games and
+transition vormen are never proposed as one continuous block — they're structured into repeated
+bouts with rest between them (SSG 3'/2' rest, MSG 5.5'/2.5' rest, LSG 9'/3.5' rest; each vorm's
+own bout/rest timing lives on its `OefenvormProfile` in `OEFENVORM_LIBRARY`), matching
+small-sided-games injury-prevention literature — so `total_clock_time_min` (work + rest) can run
+well past `target_duration_min`; that's expected, not an error. `format_hint` tells the coach the
+suggested sub-format (e.g. "7v7, rouleer groepen") and pitch size for player-count-sensitive
+vormen, deliberately in plain pitch-size/player-count language — no RPA/m² jargon.
+
+- `GET/POST /api/training-sessions/{session_id}/composition-proposal` — the session's stored
+  `week_focus`/duration/distance target plus a coach-supplied `num_players` (`?num_players=` query
+  param on `GET`, `{"num_players", "team_avg_mas_kmh", "player_flags"}` body on `POST` — both
+  routes share one handler; `player_flags` is POST-only since a list of objects doesn't fit a
+  query string). Returns the full block breakdown plus `optional_dry_run_topup`: if scaling still
+  leaves a meaningful shortfall (>150m) after rounding partijvormen to whole bouts, and
+  `team_avg_mas_kmh` was given, a supplementary ball-less running block is suggested to close the
+  gap (`null` otherwise).
 - `POST /api/training-sessions/{session_id}/vorm-target` — body: `{vorm, duration_min,
   num_players}`. Calls `calculate_vorm_target()` for that one oefenvorm and returns its expected
-  duration/distance/intensity band. Meant to be called every time a coach picks a vorm from the
-  dropdown and types a duration, e.g. while building out a session block by block. `session_id` is
-  only used to keep the call tenant-scoped (404 for another club's session) — the computation
-  itself only depends on the request body.
+  duration/distance/intensity band/bout structure. Meant to be called every time a coach picks a
+  vorm from the dropdown and types a duration, e.g. while building out a session block by block.
+- `POST /api/training-sessions/{session_id}/recalculate` — body: `{blocks, target_distance_km,
+  player_flags}`. Re-sums a (possibly coach-edited) block list — e.g. after swapping in a
+  `vorm-target` result for one block — against the given km goal via
+  `services.session_composition.summarize_composition()`, the same function
+  `propose_session_composition()` itself calls internally. Its `deviation_note` adds an explicit
+  overload warning when the total is clearly above target AND `player_flags` already lists an
+  `overload`/`poor_recovery` player, so a coach doesn't accidentally push extra volume onto
+  someone already flagged.
+- `POST /api/training-sessions/dry-run-topup` — body: `{remaining_distance_km,
+  team_avg_mas_kmh}`. A standalone (not session-scoped, since `propose_optional_dry_running_topup()`
+  needs no session context) way to ask for the same supplementary running block on demand, for
+  when a coach wants one after the fact rather than only seeing it inline on the initial proposal.
 
-Both endpoints return a clear `400` (never FastAPI's generic `422`) for an unknown oefenvorm key
-or `num_players <= 0` — `vorm` and `num_players` are accepted as plain, unconstrained types in the
-request schemas specifically so every rejection routes through
-`services.session_composition`'s own `ValueError`s (plus one explicit `num_players` check in the
-router for `vorm-target`, since `calculate_vorm_target()` doesn't validate that itself) instead of
-Pydantic's request validation.
+`{session_id}`-scoped endpoints validate session ownership (404 for another club's session) but
+`vorm-target`/`recalculate` compute purely from their request body, not the session's stored
+values — mirroring how `POST /api/makeup-programs/generate-for-match` already separates "which
+club resource is this for" from "what to compute with". All four endpoints return a clear `400`
+(never FastAPI's generic `422`) for an unknown oefenvorm key or `num_players <= 0` — `vorm` and
+`num_players` are accepted as plain, unconstrained types in the request schemas specifically so
+every rejection routes through `services.session_composition`'s own `ValueError`s (plus one
+explicit `num_players` check in the router for `vorm-target`, since `calculate_vorm_target()`
+doesn't validate that itself) instead of Pydantic's request validation.
+
+`backend/tests/test_session_composition.py` (run via `pytest` from `backend/`, now in
+`requirements.txt`) pins a regression scenario — 18 players, an intensification week, a 68'/6.3km
+target — asserting the proposal's total distance stays within 10% of the km goal despite the
+longer partijvorm bout/rest structure above (currently lands at 5.99 km, ~5% under).
 
 ## Frontend
 

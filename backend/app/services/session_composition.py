@@ -240,16 +240,23 @@ class VormTarget:
 
 def calculate_vorm_target(vorm: OefenvormType, duration_min: float, num_players: int) -> VormTarget:
     """
-    De coach kiest zelf één vorm uit het keuzemenu (of dit wordt intern
-    aangeroepen vanuit propose_session_composition); dit rekent automatisch
-    de verwachte afstand door, geschaald naar het aantal spelers voor
-    vormen waar dat relevant is, en structureert partijvormen in
-    wetenschappelijk onderbouwde bouts i.p.v. één continu blok.
+    Gebruikt voor CONTINUE vormen (pass-en-trap, balbezit, patroon,
+    afwerking) waar de coach de werktijd rechtstreeks instelt, én intern
+    door propose_session_composition() om vanuit een gewenste werktijd een
+    startvoorstel te bouwen.
 
-    'duration_min' is de GEWENSTE totale werktijd. Voor bout-vormen wordt
-    dit afgerond naar een heel aantal herhalingen van de vaste bout-duur
-    (minstens 1) — de effectieve werktijd kan daardoor licht afwijken van
-    het gevraagde getal.
+    Voor PARTIJVORMEN (SSG/MSG/LSG/transitie) is dit NIET de functie die de
+    coach-UI voor handmatige aanpassing mag aanroepen — gebruik daar
+    calculate_vorm_target_by_reps(), zodat de bloktijd zelf (wetenschappelijk
+    vastgelegd, bv. 3' voor SSG) nooit door vrije invoer kan verschuiven.
+    Deze functie rondt een gewenste werktijd wel af naar een heel aantal
+    bouts van de vaste lengte, maar mag niet gebruikt worden om zelf een
+    afwijkende bloktijd te forceren (bv. '5 min werk verdeeld over 3 bouts'
+    zou een bloktijd van 1,7' opleveren — dat is exact wat vermeden moet
+    worden).
+
+    'duration_min' is de GEWENSTE totale werktijd; wordt begrensd tot de
+    typical_duration_min-bandbreedte van de vorm (veiligheidsplafond).
     """
     if vorm not in OEFENVORM_LIBRARY:
         raise ValueError(f"Onbekende oefenvorm: {vorm}")
@@ -259,6 +266,7 @@ def calculate_vorm_target(vorm: OefenvormType, duration_min: float, num_players:
         raise ValueError("Aantal spelers moet groter zijn dan 0.")
 
     profile = OEFENVORM_LIBRARY[vorm]
+    duration_min, clamp_note = _clamp_to_typical_duration(vorm, duration_min)
     dist_per_min = _distance_per_min_for_vorm(vorm, num_players)
 
     if profile.bout_duration_min is not None:
@@ -282,8 +290,58 @@ def calculate_vorm_target(vorm: OefenvormType, duration_min: float, num_players:
         rest_between_bouts_min=profile.rest_between_bouts_min,
         total_clock_time_min=round(total_clock_time, 1),
         format_hint=_suggested_format_label(vorm, num_players),
-        notes=profile.notes,
+        notes=profile.notes + (f" {clamp_note}" if clamp_note else ""),
     )
+
+
+def calculate_vorm_target_by_reps(vorm: OefenvormType, num_bouts: int, num_players: int) -> VormTarget:
+    """
+    DE functie die de coach-UI moet aanroepen wanneer hij een partijvorm
+    (SSG/MSG/LSG/transitie) handmatig aanpast. De coach kiest enkel het
+    AANTAL herhalingen — de bloktijd zelf (bv. 3' voor SSG) staat vast en is
+    nooit instelbaar, exact om de fout uit de vorige versie te voorkomen
+    (een bloktijd die verschuift naargelang wat de coach in twee losse
+    velden intikt).
+
+    num_bouts wordt begrensd tot een veilig maximum, afgeleid van de
+    typical_duration_min-bovengrens van de vorm gedeeld door de bloktijd.
+    """
+    if vorm not in OEFENVORM_LIBRARY:
+        raise ValueError(f"Onbekende oefenvorm: {vorm}")
+    profile = OEFENVORM_LIBRARY[vorm]
+    if profile.bout_duration_min is None:
+        raise ValueError(
+            f"{profile.label} is een continue vorm zonder bout-structuur — "
+            f"gebruik calculate_vorm_target() met een werktijd i.p.v. een aantal bouts."
+        )
+    if num_bouts <= 0:
+        raise ValueError("Aantal bouts moet groter zijn dan 0.")
+    if num_players <= 0:
+        raise ValueError("Aantal spelers moet groter zijn dan 0.")
+
+    max_bouts = max(1, int(profile.typical_duration_min[1] // profile.bout_duration_min))
+    clamp_note = ""
+    if num_bouts > max_bouts:
+        clamp_note = (f" Aantal bouts begrensd van {num_bouts} naar {max_bouts} "
+                       f"(veiligheidsplafond voor deze vorm: max. {profile.typical_duration_min[1]}' werktijd).")
+        num_bouts = max_bouts
+
+    requested_duration = num_bouts * profile.bout_duration_min
+    result = calculate_vorm_target(vorm, requested_duration, num_players)
+    if clamp_note:
+        result.notes += clamp_note
+    return result
+
+
+def _clamp_to_typical_duration(vorm: OefenvormType, duration_min: float):
+    """Begrenst een gevraagde werktijd tot de typical_duration_min-bandbreedte
+    van de vorm — een zacht veiligheidsplafond tegen onrealistische invoer
+    (bv. 40' ononderbroken small-sided games)."""
+    profile = OEFENVORM_LIBRARY[vorm]
+    low, high = profile.typical_duration_min
+    if duration_min > high:
+        return high, f"(Werktijd begrensd tot het veilige maximum van {high}' voor deze vorm.)"
+    return duration_min, ""
 
 
 @dataclass

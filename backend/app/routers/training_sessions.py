@@ -20,8 +20,10 @@ from app.schemas_dashboards import (
 )
 from app.services.periodization import WeekFocus as ServiceWeekFocus
 from app.services.session_composition import (
+    OEFENVORM_LIBRARY,
     VormTarget,
     calculate_vorm_target,
+    calculate_vorm_target_by_reps,
     propose_optional_dry_running_topup,
     propose_session_composition,
     summarize_composition,
@@ -97,19 +99,47 @@ def vorm_target(
     db: Session = Depends(get_db),
 ):
     """Wordt aangeroepen telkens de coach een vorm uit het keuzemenu
-    selecteert en een duur ingeeft. session_id dient enkel om de aanroep
-    tenant-scoped te houden (404 bij een sessie van een andere club) — de
-    berekening zelf gebruikt alleen vorm/duration_min/num_players uit de
-    request body, niet de opgeslagen week_focus/doelen van de sessie."""
+    selecteert. Partijvormen (SSG/MSG/LSG/transitie) zijn voortaan enkel
+    aanpasbaar via num_bouts — de bloktijd zelf ligt wetenschappelijk vast
+    en is nooit instelbaar (calculate_vorm_target_by_reps); continue vormen
+    blijven ongewijzigd via duration_min lopen (calculate_vorm_target).
+    session_id dient enkel om de aanroep tenant-scoped te houden — de
+    berekening zelf gebruikt alleen de request body."""
     _get_session_or_404(session_id, current_user, db)
 
-    if payload.num_players <= 0:
-        raise HTTPException(status_code=400, detail="Aantal spelers moet groter zijn dan 0.")
+    profile = OEFENVORM_LIBRARY.get(payload.vorm)
+    if profile is None:
+        raise HTTPException(status_code=400, detail=f"Onbekende oefenvorm: {payload.vorm}")
 
-    try:
-        result = calculate_vorm_target(payload.vorm, payload.duration_min, payload.num_players)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    is_bout_vorm = profile.bout_duration_min is not None
+
+    if is_bout_vorm:
+        if payload.duration_min is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{profile.label} is een partijvorm — de bloktijd ligt vast, "
+                    f"geef num_bouts op i.p.v. duration_min."
+                ),
+            )
+        if payload.num_bouts is None:
+            raise HTTPException(status_code=400, detail="num_bouts is verplicht voor deze partijvorm.")
+        try:
+            result = calculate_vorm_target_by_reps(payload.vorm, payload.num_bouts, payload.num_players)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        if payload.num_bouts is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{profile.label} is een continue vorm zonder bout-structuur — geef duration_min op i.p.v. num_bouts.",
+            )
+        if payload.duration_min is None:
+            raise HTTPException(status_code=400, detail="duration_min is verplicht voor deze vorm.")
+        try:
+            result = calculate_vorm_target(payload.vorm, payload.duration_min, payload.num_players)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return VormTargetSchema.model_validate(result)
 

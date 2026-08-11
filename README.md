@@ -247,10 +247,21 @@ vormen, deliberately in plain pitch-size/player-count language — no RPA/m² ja
   leaves a meaningful shortfall (>150m) after rounding partijvormen to whole bouts, and
   `team_avg_mas_kmh` was given, a supplementary ball-less running block is suggested to close the
   gap (`null` otherwise).
-- `POST /api/training-sessions/{session_id}/vorm-target` — body: `{vorm, duration_min,
-  num_players}`. Calls `calculate_vorm_target()` for that one oefenvorm and returns its expected
-  duration/distance/intensity band/bout structure. Meant to be called every time a coach picks a
-  vorm from the dropdown and types a duration, e.g. while building out a session block by block.
+- `POST /api/training-sessions/{session_id}/vorm-target` — body: `{vorm, num_players}` plus
+  **either** `duration_min` **or** `num_bouts`, never both, decided by which of the two the vorm
+  actually is: partijvormen (SSG/MSG/LSG/transitie) only take `num_bouts` — the bout length itself
+  (e.g. 3' for SSG) is scientifically fixed and was never meant to be coach-adjustable, so
+  `calculate_vorm_target_by_reps()` is now the only way to manually resize one, letting the coach
+  pick a rep count while the block length stays put; continuous vormen (pass-en-trap, balbezit,
+  patroon, afwerking) are unchanged, still sized via `duration_min` through `calculate_vorm_target()`.
+  Sending `duration_min` to a partijvorm, `num_bouts` to a continuous vorm, or omitting the one
+  the vorm needs all return `400`. Both underlying functions clamp their input to a safety
+  ceiling derived from the vorm's `typical_duration_min` upper bound (a requested `duration_min`
+  is capped directly; a requested `num_bouts` is capped to `typical_duration_min[1] //
+  bout_duration_min`) and append an explanatory note to the returned `notes` field whenever that
+  ceiling is actually hit, so a coach who asks for an unrealistic amount (e.g. 40' of continuous
+  small-sided games) gets a safe result plus a visible explanation instead of a silent clamp or a
+  rejected request.
 - `POST /api/training-sessions/{session_id}/recalculate` — body: `{blocks, target_distance_km,
   player_flags}`. Re-sums a (possibly coach-edited) block list — e.g. after swapping in a
   `vorm-target` result for one block — against the given km goal via
@@ -268,11 +279,12 @@ vormen, deliberately in plain pitch-size/player-count language — no RPA/m² ja
 `vorm-target`/`recalculate` compute purely from their request body, not the session's stored
 values — mirroring how `POST /api/makeup-programs/generate-for-match` already separates "which
 club resource is this for" from "what to compute with". All four endpoints return a clear `400`
-(never FastAPI's generic `422`) for an unknown oefenvorm key or `num_players <= 0` — `vorm` and
-`num_players` are accepted as plain, unconstrained types in the request schemas specifically so
-every rejection routes through `services.session_composition`'s own `ValueError`s (plus one
-explicit `num_players` check in the router for `vorm-target`, since `calculate_vorm_target()`
-doesn't validate that itself) instead of Pydantic's request validation.
+(never FastAPI's generic `422`) for an unknown oefenvorm key or `num_players <= 0` — `vorm`,
+`duration_min`/`num_bouts`, and `num_players` are all accepted as plain, unconstrained/optional
+types in the request schemas specifically so every rejection (unknown vorm, wrong field for the
+vorm, missing required field, non-positive count) routes through
+`services.session_composition`'s own `ValueError`s plus the router's own vorm/field-shape checks,
+instead of Pydantic's request validation.
 
 `backend/tests/test_session_composition.py` (run via `pytest` from `backend/`, now in
 `requirements.txt`) pins a regression scenario — 18 players, an intensification week, a 68'/6.3km

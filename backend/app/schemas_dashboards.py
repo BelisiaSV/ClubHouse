@@ -334,14 +334,17 @@ class SessionCompositionProposalSchema(BaseModel):
 
 
 class VormTargetRequest(BaseModel):
-    # vorm is a plain str (not the OefenvormType enum) and duration_min/
-    # num_players carry no Pydantic-level bounds on purpose: all three are
-    # validated inside services.session_composition.calculate_vorm_target()
-    # (plus an explicit num_players check in the router), so every rejection
-    # comes back as a clear 400 with a Dutch message instead of a generic
-    # 422 from FastAPI's own request validation.
+    # vorm is a plain str (not the OefenvormType enum) and none of these
+    # fields carry Pydantic-level bounds/requiredness, on purpose: which of
+    # duration_min/num_bouts is required (and which is forbidden) depends on
+    # whether vorm is a bout-vorm (SSG/MSG/LSG/transitie, num_bouts only —
+    # the bout length itself is fixed per vorm and never coach-settable) or
+    # a continuous one (duration_min only) — app/routers/training_sessions.py
+    # enforces that split and returns a clear 400 on a mismatch, instead of
+    # a generic 422 from FastAPI's own request validation.
     vorm: str
-    duration_min: float
+    duration_min: Optional[float] = None
+    num_bouts: Optional[int] = None
     num_players: int
 
 

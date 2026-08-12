@@ -1,9 +1,7 @@
-import time
-from pathlib import Path
-
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from app.core.storage import store_club_logo
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Club, User
@@ -11,7 +9,6 @@ from app.schemas import ClubOut, ClubUpdateRequest
 
 router = APIRouter(prefix="/api/clubs", tags=["clubs"])
 
-LOGO_STORAGE_DIR = Path(__file__).resolve().parent.parent.parent / "static" / "logos"
 ALLOWED_LOGO_CONTENT_TYPES = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -46,11 +43,13 @@ def upload_my_club_logo(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Coaches upload their own logo (no external URL needed); it's stored
-    under a filename keyed by club_id — a re-upload overwrites the same
-    file, so club.logo_url stays stable except for a cache-busting query
-    param. Served back via the /static mount (see app/main.py) and shown
-    everywhere as a low-opacity background watermark (frontend Layout)."""
+    """Coaches upload their own logo (no external URL needed); stored under a
+    path keyed by club_id — a re-upload overwrites the same object, so
+    club.logo_url stays stable except for a cache-busting query param.
+    app.core.storage.store_club_logo() picks Supabase Storage vs. local disk
+    depending on which env vars are set — see that module's docstring.
+    Shown everywhere as a low-opacity background watermark (frontend
+    Layout)."""
     extension = ALLOWED_LOGO_CONTENT_TYPES.get(file.content_type)
     if extension is None:
         raise HTTPException(
@@ -63,19 +62,11 @@ def upload_my_club_logo(
         raise HTTPException(status_code=400, detail="Logo mag maximaal 2 MB groot zijn.")
 
     club = db.get(Club, current_user.club_id)
-    LOGO_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        club.logo_url = store_club_logo(club.id, contents, file.content_type, extension)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail="Kon het logo niet opslaan. Probeer opnieuw.") from exc
 
-    # Remove any previous logo for this club under a different extension, so
-    # switching from e.g. .png to .svg doesn't leave the old file lingering.
-    for existing in LOGO_STORAGE_DIR.glob(f"{club.id}.*"):
-        existing.unlink(missing_ok=True)
-
-    destination = LOGO_STORAGE_DIR / f"{club.id}{extension}"
-    destination.write_bytes(contents)
-
-    # Cache-busting query param: the filename is stable per club, so without
-    # this the browser would keep showing a cached old logo after a re-upload.
-    club.logo_url = f"/static/logos/{club.id}{extension}?v={int(time.time())}"
     db.commit()
     db.refresh(club)
     return club

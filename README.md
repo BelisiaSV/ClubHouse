@@ -453,3 +453,58 @@ matches yet → an empty state links to `/matches` to add one.
 Start Postgres, then the backend (port 8000) with migrations applied, then the frontend (port
 5173). Register a new club at `/register`, or log in with the seeded demo account
 (`coach@demo-fc.be` / `changeme123`).
+
+## Deploying to Vercel + Supabase
+
+Two separate Vercel projects (one per subdirectory) + one Supabase project. Nothing here runs
+automatically from a push — each step below is a one-time dashboard action.
+
+**1. Supabase — database + logo storage**
+1. Create a Supabase project.
+2. *Storage* → create a **public** bucket named `club-logos` (or pick your own name and set
+   `SUPABASE_STORAGE_BUCKET` to match in step 3).
+3. *Project Settings → API* → copy the **Project URL** and the **`service_role`** secret key (not
+   the `anon` key — uploads go through `app/core/storage.py` with the service role, bypassing
+   Storage's row-level security since there's no end-user Supabase session here).
+4. *Project Settings → Database* → copy the connection string, and prefix it with
+   `postgresql+psycopg2://` in place of `postgresql://` (SQLAlchemy dialect requirement — see
+   `DATABASE_URL` in `.env.example`). Supabase requires `sslmode=require`; append
+   `?sslmode=require` if it isn't already on the connection string.
+5. Run the schema against it once from your machine (not from Vercel — there's no deploy hook for
+   this):
+   ```bash
+   cd backend && source .venv/bin/activate
+   export DATABASE_URL="<the postgresql+psycopg2://... string from step 4>"
+   alembic upgrade head
+   python seed_platform_admin.py   # so you (Jordy) have an admin login on the deployed app too
+   ```
+   Re-run `alembic upgrade head` the same way after any future migration is added — deploying new
+   code does not run it for you.
+
+**2. Vercel — backend project**
+1. Import the GitHub repo as a new Vercel project, with **Root Directory** set to `backend/`.
+   Vercel picks up `backend/vercel.json` (routes every request to `backend/api/index.py`, which
+   re-exports the FastAPI `app` — see "Backend" → files added for Vercel) and
+   `backend/requirements.txt` automatically.
+2. Project Settings → Environment Variables — set everything from `backend/.env.example`:
+   `DATABASE_URL` (step 1.4/1.5), `JWT_SECRET_KEY` (a real secret, not the dev default),
+   `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`/`SUPABASE_STORAGE_BUCKET` (step 1.2–1.3),
+   `ALLOWED_ORIGINS` (the frontend project's URL from step 3 — you'll need to circle back and add
+   this after step 3 gives you that URL), and the `SMTP_*` vars if you want real password-reset
+   emails instead of them just being logged.
+3. Deploy. Note the resulting `https://<something>.vercel.app` URL — that's `VITE_API_BASE_URL`
+   for the frontend project below.
+
+**3. Vercel — frontend project**
+1. Import the same GitHub repo as a *second* Vercel project, **Root Directory** set to
+   `frontend/`. Vercel auto-detects the Vite framework preset; `frontend/vercel.json` adds the SPA
+   rewrite so refreshing on e.g. `/players` doesn't 404.
+2. Environment Variables — set `VITE_API_BASE_URL` to the backend project's URL from step 2.3
+   (no trailing slash).
+3. Deploy, then go back to the backend project's `ALLOWED_ORIGINS` (step 2.2) and set it to this
+   frontend URL so CORS actually allows it — the two projects need each other's URLs, so the first
+   deploy of each will necessarily be missing one env var until you circle back once.
+
+**Every subsequent push to this branch redeploys both projects automatically** once they're
+connected to GitHub (Vercel's default). Nothing else here re-runs on deploy — migrations (step
+1.5) and env var changes are always manual.

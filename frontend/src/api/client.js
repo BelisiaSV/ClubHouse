@@ -1,6 +1,14 @@
 import axios from "axios";
 
-const client = axios.create();
+// Empty (the default) in local dev, where Vite's own dev-server proxy
+// (vite.config.js) forwards relative /api, /mas, /admin, /static paths to
+// the backend on :8000 — so requests stay relative and nothing changes.
+// Set to the deployed backend's own origin (e.g. a Vercel project URL) in
+// production, where frontend and backend are separate deployments with no
+// shared proxy, so every request needs to be absolute instead.
+const client = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL || "",
+});
 
 client.interceptors.request.use((config) => {
   const token = localStorage.getItem("access_token");

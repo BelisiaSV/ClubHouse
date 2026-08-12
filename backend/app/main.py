@@ -1,9 +1,12 @@
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.routers import (
+    admin,
     auth,
     calendar,
     clubs,
@@ -44,6 +47,11 @@ app.include_router(team_readiness.router)
 app.include_router(volume_planning.router)
 app.include_router(calendar.router)
 app.include_router(training_sessions.router)
+app.include_router(admin.router)
+
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+STATIC_DIR.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/api/health")

@@ -6,7 +6,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_module
 from app.models import CalendarEvent as DbCalendarEvent
 from app.models import CalendarEventPlayer as DbCalendarEventPlayer
 from app.models import MasTest, Player, User
@@ -27,8 +27,11 @@ from app.services.mas_testing import (
     recalculate_training_zones,
     record_mas_test,
 )
+from app.services.platform_admin import ModuleKey
 
-router = APIRouter(prefix="/api/mas-testing", tags=["mas-testing"])
+router = APIRouter(
+    prefix="/api/mas-testing", tags=["mas-testing"], dependencies=[Depends(require_module(ModuleKey.MAS_TEST))]
+)
 
 
 def _sync_mas_test_calendar(club_id: uuid.UUID, db: Session) -> list[DbCalendarEvent]:

@@ -6,7 +6,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_module
 from app.models import CycleLength as DbCycleLength
 from app.models import TrainingCycle as DbTrainingCycle
 from app.models import TrainingCycleWeek as DbTrainingCycleWeek
@@ -14,6 +14,8 @@ from app.models import User
 from app.models import WeekFocus as DbWeekFocus
 from app.schemas_dashboards import (
     BuildCycleRequest,
+    CurrentCyclesResponse,
+    PatchActiveCycleRequest,
     QueueNextCycleRequest,
     RescheduleCycleRequest,
     TrainingCycleSchema,
@@ -22,10 +24,13 @@ from app.services.periodization import CycleWeek as ServiceCycleWeek
 from app.services.periodization import Season
 from app.services.periodization import TrainingCycle as ServiceTrainingCycle
 from app.services.periodization import WeekFocus as ServiceWeekFocus
-from app.services.periodization import build_cycle, handle_match_cancellation
+from app.services.periodization import build_cycle, get_active_cycle_and_week, handle_match_cancellation
 from app.services.periodization import queue_next_cycle as svc_queue_next_cycle
+from app.services.platform_admin import ModuleKey
 
-router = APIRouter(prefix="/api/periodization", tags=["periodization"])
+router = APIRouter(
+    prefix="/api/periodization", tags=["periodization"], dependencies=[Depends(require_module(ModuleKey.KALENDER))]
+)
 
 _LENGTH_WEEKS_TO_DB = {
     4: DbCycleLength.FOUR_WEEKS,
@@ -211,3 +216,78 @@ def queue_next_cycle_endpoint(
         )
     db.commit()
     return TrainingCycleSchema.model_validate(result)
+
+
+def _find_cycle_index(season: Season, cycle: ServiceTrainingCycle) -> int:
+    return next(i for i, c in enumerate(season.cycles) if c is cycle)
+
+
+@router.get("/cycles/current", response_model=CurrentCyclesResponse)
+def get_current_cycles(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Voor de Instellingen-pagina: de actieve cyclus (dynamisch bepaald,
+    nooit de statische is_active-kolom) en de klaargezette volgende cyclus,
+    als die er is — zodat de coach beide op elk moment kan zien en
+    aanpassen in plaats van enkel blind een nieuwe te kunnen klaarzetten."""
+    today = date.today()
+    season, cycle_db_ids = load_season_from_db(current_user.club_id, db)
+    active_cycle, _ = get_active_cycle_and_week(season, today)
+
+    active_schema = None
+    if active_cycle is not None:
+        idx = _find_cycle_index(season, active_cycle)
+        active_schema = TrainingCycleSchema.model_validate(active_cycle).model_copy(
+            update={"id": cycle_db_ids[idx]}
+        )
+
+    queued_schema = None
+    if season.cycles and (active_cycle is None or season.cycles[-1] is not active_cycle):
+        queued_cycle = season.cycles[-1]
+        if queued_cycle.start_date > today:
+            queued_schema = TrainingCycleSchema.model_validate(queued_cycle).model_copy(
+                update={"id": cycle_db_ids[-1]}
+            )
+
+    return CurrentCyclesResponse(active=active_schema, queued=queued_schema)
+
+
+@router.patch("/cycles/active", response_model=TrainingCycleSchema)
+def patch_active_cycle(
+    payload: PatchActiveCycleRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Past de lopende, actieve cyclus aan — enkel de veilige velden (naam,
+    doelwedstrijddatum, piekvolume), nooit de lengte/startdatum: de weken
+    van een reeds actieve cyclus liggen al vast op datums waar
+    player_weekly_distance_log-rijen al naar verwijzen (via
+    training_cycle_id/week_number), dus een structurele wijziging zou die
+    geschiedenis kunnen breken. Gebruik POST /cycles om de actieve cyclus
+    volledig te vervangen als dat toch nodig is."""
+    today = date.today()
+    season, cycle_db_ids = load_season_from_db(current_user.club_id, db)
+    active_cycle, _ = get_active_cycle_and_week(season, today)
+    if active_cycle is None:
+        raise HTTPException(status_code=404, detail="Geen actieve cyclus gevonden.")
+
+    idx = _find_cycle_index(season, active_cycle)
+    db_cycle = db.get(DbTrainingCycle, cycle_db_ids[idx])
+
+    updates = payload.model_dump(exclude_unset=True)
+    if "name" in updates:
+        active_cycle.name = updates["name"]
+        db_cycle.name = updates["name"]
+    if "target_match_date" in updates:
+        active_cycle.target_match_date = updates["target_match_date"]
+        db_cycle.target_match_date = updates["target_match_date"]
+    if "target_peak_weekly_km" in updates:
+        # Niet persisteerbaar: training_cycles heeft hier geen kolom voor
+        # (dezelfde bestaande leemte als bij POST /cycles) — enkel in het
+        # antwoord meegegeven voor API-symmetrie.
+        active_cycle.target_peak_weekly_km = updates["target_peak_weekly_km"]
+
+    db.commit()
+
+    return TrainingCycleSchema.model_validate(active_cycle).model_copy(update={"id": db_cycle.id})

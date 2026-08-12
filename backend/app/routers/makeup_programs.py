@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_module
 from app.models import MasTest, Match, MatchMinutes, Player
 from app.models import TrainingCycle as DbTrainingCycle
 from app.models import TrainingCycleWeek as DbTrainingCycleWeek
@@ -28,8 +28,13 @@ from app.services.makeup_programs import (
 )
 from app.services.periodization import CycleWeek as ServiceCycleWeek
 from app.services.periodization import WeekFocus as ServiceWeekFocus
+from app.services.platform_admin import ModuleKey
 
-router = APIRouter(prefix="/api/makeup-programs", tags=["makeup-programs"])
+router = APIRouter(
+    prefix="/api/makeup-programs",
+    tags=["makeup-programs"],
+    dependencies=[Depends(require_module(ModuleKey.MAS_COMPENSATIE))],
+)
 
 
 @router.post("/generate", response_model=list[GeneratedRunningProgramSchema])

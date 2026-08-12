@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_module
 from app.models import MasTest, Match, MatchMinutes, Player, PlayerWeeklyDistanceLog, User
 from app.models import TrainingCycle as DbTrainingCycle
 from app.models import TrainingCycleWeek as DbTrainingCycleWeek
@@ -17,10 +17,13 @@ from app.schemas_matches import (
     MatchPlayerRow,
     MatchPlayerUpdate,
 )
+from app.services.platform_admin import ModuleKey
 from app.services.volume_planning import PlayerPosition as ServicePlayerPosition
 from app.services.volume_planning import populate_match_distance_for_week
 
-router = APIRouter(prefix="/api/matches", tags=["matches"])
+router = APIRouter(
+    prefix="/api/matches", tags=["matches"], dependencies=[Depends(require_module(ModuleKey.KALENDER))]
+)
 
 
 def _get_club_match(match_id: uuid.UUID, current_user: User, db: Session) -> Match:

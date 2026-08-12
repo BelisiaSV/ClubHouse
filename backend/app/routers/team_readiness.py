@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_module
 from app.models import TrainingSession as DbTrainingSession
 from app.models import User
 from app.models import WeekFocus as DbWeekFocus
@@ -12,9 +12,14 @@ from app.schemas_dashboards import (
     ProposeTrainingRequest,
     TrainingProposalSchema,
 )
+from app.services.platform_admin import ModuleKey
 from app.services.team_readiness import flag_players, propose_next_training
 
-router = APIRouter(prefix="/api/team-readiness", tags=["team-readiness"])
+router = APIRouter(
+    prefix="/api/team-readiness",
+    tags=["team-readiness"],
+    dependencies=[Depends(require_module(ModuleKey.NEXT_TRAINING))],
+)
 
 
 @router.post("/flags", response_model=list[PlayerFlagSchema])

@@ -142,36 +142,36 @@ export default function Players() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto py-10 px-4">
+    <div className="max-w-4xl mx-auto py-12 px-4">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">Spelers</h1>
+          <h1 className="text-3xl font-bold text-white tracking-tight mb-1">Spelers</h1>
           <p className="text-sm text-gray-400">Beheer je spelersgroep, individueel of in bulk.</p>
         </div>
         <button
           onClick={() => setShowAddForm((v) => !v)}
-          className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-md text-sm"
+          className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium"
         >
           {showAddForm ? "Annuleren" : "+ Speler toevoegen"}
         </button>
       </div>
 
       {showAddForm && (
-        <form onSubmit={handleAddPlayer} className="bg-gray-800 rounded-lg p-4 mb-6 space-y-3">
+        <form onSubmit={handleAddPlayer} className="bg-gray-900/60 border border-white/10 rounded-2xl p-6 mb-6 space-y-4 shadow-xl shadow-black/20">
           <div className="grid grid-cols-2 gap-3">
             <input
               required
               placeholder="Voornaam"
               value={firstName}
               onChange={(e) => setFirstName(e.target.value)}
-              className="bg-gray-900 text-white rounded-md px-3 py-2 text-sm"
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ring-brand"
             />
             <input
               required
               placeholder="Naam"
               value={lastName}
               onChange={(e) => setLastName(e.target.value)}
-              className="bg-gray-900 text-white rounded-md px-3 py-2 text-sm"
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ring-brand"
             />
             <input
               type="number"
@@ -180,33 +180,33 @@ export default function Players() {
               placeholder="Rugnummer"
               value={jerseyNumber}
               onChange={(e) => setJerseyNumber(e.target.value)}
-              className="bg-gray-900 text-white rounded-md px-3 py-2 text-sm"
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ring-brand"
             />
             <input
               type="email"
               placeholder="E-mailadres"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="bg-gray-900 text-white rounded-md px-3 py-2 text-sm"
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ring-brand"
             />
             <input
               placeholder="Telefoonnummer"
               value={phoneNumber}
               onChange={(e) => setPhoneNumber(e.target.value)}
-              className="bg-gray-900 text-white rounded-md px-3 py-2 text-sm col-span-2"
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm col-span-2 focus:outline-none focus:ring-2 ring-brand"
             />
           </div>
           <button
             type="submit"
             disabled={addSubmitting}
-            className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white px-4 py-2 rounded-md text-sm"
+            className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {addSubmitting ? "Bezig…" : "Toevoegen"}
           </button>
         </form>
       )}
 
-      <div className="bg-gray-800 rounded-lg p-4 mb-6">
+      <div className="bg-gray-900/60 border border-white/10 rounded-2xl p-6 mb-6 shadow-xl shadow-black/20">
         <h2 className="text-white font-semibold mb-1">Bulk import</h2>
         <p className="text-sm text-gray-400 mb-3">
           Download het sjabloon, vul de gegevens in (rugnummer, naam, voornaam, e-mailadres,
@@ -215,11 +215,11 @@ export default function Players() {
         <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={handleDownloadTemplate}
-            className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-md text-sm"
+            className="bg-white/5 hover:bg-white/10 border border-white/10 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors"
           >
             Download sjabloon (.xlsx)
           </button>
-          <label className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-md text-sm cursor-pointer">
+          <label className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium cursor-pointer">
             {importing ? "Bezig met importeren…" : "Upload ingevuld sjabloon"}
             <input
               ref={fileInputRef}
@@ -253,15 +253,15 @@ export default function Players() {
       {loading && <p className="text-gray-400">Laden…</p>}
       {error && <p className="text-red-400">{error}</p>}
       {!loading && !error && (
-        <div className="bg-gray-800 rounded-lg overflow-hidden">
+        <div className="bg-gray-900/60 border border-white/10 rounded-2xl overflow-hidden shadow-xl shadow-black/20">
           <table className="w-full text-sm text-left text-gray-300">
-            <thead className="bg-gray-700 text-gray-200">
-              <tr>
-                <th className="px-4 py-2">#</th>
-                <th className="px-4 py-2">Naam</th>
-                <th className="px-4 py-2">E-mailadres</th>
-                <th className="px-4 py-2">Telefoonnummer</th>
-                <th className="px-4 py-2">MAS-test</th>
+            <thead>
+              <tr className="text-[10px] uppercase tracking-wider text-gray-500 border-b border-white/10">
+                <th className="px-4 py-3 font-medium">#</th>
+                <th className="px-4 py-3 font-medium">Naam</th>
+                <th className="px-4 py-3 font-medium">E-mailadres</th>
+                <th className="px-4 py-3 font-medium">Telefoonnummer</th>
+                <th className="px-4 py-3 font-medium">MAS-test</th>
               </tr>
             </thead>
             <tbody>
@@ -274,24 +274,24 @@ export default function Players() {
               )}
               {players.map((p) => (
                 <Fragment key={p.id}>
-                  <tr className="border-t border-gray-700">
-                    <td className="px-4 py-2">{p.jersey_number ?? "—"}</td>
-                    <td className="px-4 py-2">
+                  <tr className="border-b border-white/5 last:border-b-0 hover:bg-white/[0.03] transition-colors">
+                    <td className="px-4 py-3">{p.jersey_number ?? "—"}</td>
+                    <td className="px-4 py-3 font-medium text-white">
                       {p.first_name} {p.last_name}
                     </td>
-                    <td className="px-4 py-2">{p.email ?? "—"}</td>
-                    <td className="px-4 py-2">{p.phone_number ?? "—"}</td>
-                    <td className="px-4 py-2">
+                    <td className="px-4 py-3">{p.email ?? "—"}</td>
+                    <td className="px-4 py-3">{p.phone_number ?? "—"}</td>
+                    <td className="px-4 py-3">
                       <button
                         onClick={() => (testPlayerId === p.id ? setTestPlayerId(null) : openTestForm(p.id))}
-                        className="text-emerald-400 hover:text-emerald-300 text-xs"
+                        className="text-brand hover:opacity-80 text-xs font-medium"
                       >
                         {testPlayerId === p.id ? "Sluiten" : "MAS-test invoeren"}
                       </button>
                     </td>
                   </tr>
                   {testPlayerId === p.id && (
-                    <tr className="border-t border-gray-700 bg-gray-900/50">
+                    <tr className="border-b border-white/5 bg-black/20">
                       <td colSpan={5} className="px-4 py-3">
                         <form onSubmit={handleRecordMasTest} className="flex flex-wrap items-end gap-3 text-sm">
                           <label className="flex flex-col text-gray-300">
@@ -299,7 +299,7 @@ export default function Players() {
                             <select
                               value={testProtocolKey}
                               onChange={(e) => setTestProtocolKey(e.target.value)}
-                              className="mt-1 bg-gray-900 text-white rounded-md px-3 py-2"
+                              className="mt-1 bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 ring-brand"
                             >
                               {protocols.map((protocol) => (
                                 <option key={protocol.key} value={protocol.key}>
@@ -317,7 +317,7 @@ export default function Players() {
                               required
                               value={testRawResult}
                               onChange={(e) => setTestRawResult(e.target.value)}
-                              className="mt-1 bg-gray-900 text-white rounded-md px-3 py-2 w-28"
+                              className="mt-1 bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2 w-28 focus:outline-none focus:ring-2 ring-brand"
                             />
                           </label>
                           <label className="flex flex-col text-gray-300">
@@ -327,13 +327,13 @@ export default function Players() {
                               required
                               value={testDate}
                               onChange={(e) => setTestDate(e.target.value)}
-                              className="mt-1 bg-gray-900 text-white rounded-md px-3 py-2"
+                              className="mt-1 bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 ring-brand"
                             />
                           </label>
                           <button
                             type="submit"
                             disabled={testSubmitting}
-                            className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white px-4 py-2 rounded-md"
+                            className="btn-brand text-white px-5 py-2.5 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             {testSubmitting ? "Bezig…" : "Opslaan"}
                           </button>

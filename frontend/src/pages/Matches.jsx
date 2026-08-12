@@ -69,41 +69,41 @@ export default function Matches() {
   };
 
   return (
-    <div className="max-w-2xl mx-auto py-10 px-4">
+    <div className="max-w-2xl mx-auto py-12 px-4">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">Wedstrijden</h1>
+          <h1 className="text-3xl font-bold text-white tracking-tight mb-1">Wedstrijden</h1>
           <p className="text-sm text-gray-400">Kalender van wedstrijden — nodig voor het MAS-compensatiepaneel.</p>
         </div>
         <button
           onClick={() => setShowForm((v) => !v)}
-          className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-md text-sm"
+          className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium"
         >
           {showForm ? "Annuleren" : "+ Wedstrijd toevoegen"}
         </button>
       </div>
 
       {showForm && (
-        <form onSubmit={handleSubmit} className="bg-gray-800 rounded-lg p-4 mb-6 space-y-3">
+        <form onSubmit={handleSubmit} className="bg-gray-900/60 border border-white/10 rounded-2xl p-6 mb-6 space-y-4 shadow-xl shadow-black/20">
           <div className="grid grid-cols-2 gap-3">
             <input
               required
               placeholder="Tegenstander"
               value={opponent}
               onChange={(e) => setOpponent(e.target.value)}
-              className="bg-gray-900 text-white rounded-md px-3 py-2 text-sm col-span-2"
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm col-span-2 focus:outline-none focus:ring-2 ring-brand"
             />
             <input
               type="datetime-local"
               required
               value={matchDate}
               onChange={(e) => setMatchDate(e.target.value)}
-              className="bg-gray-900 text-white rounded-md px-3 py-2 text-sm"
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ring-brand"
             />
             <select
               value={isHome ? "thuis" : "uit"}
               onChange={(e) => setIsHome(e.target.value === "thuis")}
-              className="bg-gray-900 text-white rounded-md px-3 py-2 text-sm"
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ring-brand"
             >
               <option value="thuis">Thuis</option>
               <option value="uit">Uit</option>
@@ -112,13 +112,13 @@ export default function Matches() {
               placeholder="Competitie (optioneel)"
               value={competition}
               onChange={(e) => setCompetition(e.target.value)}
-              className="bg-gray-900 text-white rounded-md px-3 py-2 text-sm col-span-2"
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm col-span-2 focus:outline-none focus:ring-2 ring-brand"
             />
           </div>
           <button
             type="submit"
             disabled={submitting}
-            className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white px-4 py-2 rounded-md text-sm"
+            className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {submitting ? "Bezig…" : "Toevoegen"}
           </button>
@@ -126,15 +126,15 @@ export default function Matches() {
       )}
 
       {masTestEvents.length > 0 && (
-        <div className="bg-gray-800 rounded-lg p-4 mb-6">
+        <div className="bg-gray-900/60 border border-white/10 rounded-2xl p-6 mb-6 shadow-xl shadow-black/20">
           <h2 className="text-white font-semibold mb-1">Aankomende MAS-testen</h2>
           <p className="text-sm text-gray-400 mb-3">
             Geprojecteerd tot het einde van het seizoen — wordt automatisch bijgewerkt zodra een
             coach een testresultaat invoert.
           </p>
-          <ul className="divide-y divide-gray-700">
+          <ul className="divide-y divide-white/5">
             {masTestEvents.map((ev) => (
-              <li key={ev.id} className="py-2 text-sm text-gray-300 flex justify-between">
+              <li key={ev.id} className="py-2.5 text-sm text-gray-300 flex justify-between">
                 <span>{new Date(ev.event_date).toLocaleDateString("nl-BE")}</span>
                 <span className="text-gray-400">{ev.player_ids.map(playerLabel).join(", ")}</span>
               </li>
@@ -146,34 +146,31 @@ export default function Matches() {
       {loading && <p className="text-gray-400">Laden…</p>}
       {error && <p className="text-red-400">{error}</p>}
       {!loading && !error && (
-        <div className="bg-gray-800 rounded-lg overflow-hidden">
+        <div className="bg-gray-900/60 border border-white/10 rounded-2xl overflow-hidden shadow-xl shadow-black/20">
           {matches.length === 0 ? (
             <p className="px-4 py-6 text-center text-gray-500 text-sm">
               Nog geen wedstrijden ingegeven. Voeg er een toe hierboven.
             </p>
           ) : (
             <table className="w-full text-sm text-left text-gray-300">
-              <thead className="bg-gray-700 text-gray-200">
-                <tr>
-                  <th className="px-4 py-2">Datum</th>
-                  <th className="px-4 py-2">Tegenstander</th>
-                  <th className="px-4 py-2">Thuis/Uit</th>
-                  <th className="px-4 py-2">Competitie</th>
-                  <th className="px-4 py-2"></th>
+              <thead>
+                <tr className="text-[10px] uppercase tracking-wider text-gray-500 border-b border-white/10">
+                  <th className="px-4 py-3 font-medium">Datum</th>
+                  <th className="px-4 py-3 font-medium">Tegenstander</th>
+                  <th className="px-4 py-3 font-medium">Thuis/Uit</th>
+                  <th className="px-4 py-3 font-medium">Competitie</th>
+                  <th className="px-4 py-3 font-medium"></th>
                 </tr>
               </thead>
               <tbody>
                 {matches.map((m) => (
-                  <tr key={m.id} className="border-t border-gray-700">
-                    <td className="px-4 py-2">{new Date(m.match_date).toLocaleString("nl-BE")}</td>
-                    <td className="px-4 py-2">{m.opponent}</td>
-                    <td className="px-4 py-2">{m.is_home ? "Thuis" : "Uit"}</td>
-                    <td className="px-4 py-2">{m.competition ?? "—"}</td>
-                    <td className="px-4 py-2 text-right">
-                      <button
-                        onClick={() => navigate("/")}
-                        className="text-emerald-400 hover:underline text-xs"
-                      >
+                  <tr key={m.id} className="border-b border-white/5 last:border-b-0 hover:bg-white/[0.03] transition-colors">
+                    <td className="px-4 py-3">{new Date(m.match_date).toLocaleString("nl-BE")}</td>
+                    <td className="px-4 py-3 font-medium text-white">{m.opponent}</td>
+                    <td className="px-4 py-3">{m.is_home ? "Thuis" : "Uit"}</td>
+                    <td className="px-4 py-3">{m.competition ?? "—"}</td>
+                    <td className="px-4 py-3 text-right">
+                      <button onClick={() => navigate("/")} className="text-brand hover:opacity-80 text-xs font-medium">
                         Naar MAS-paneel →
                       </button>
                     </td>

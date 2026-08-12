@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_module
 from app.models import TrainingSession as DbTrainingSession
 from app.models import User
 from app.schemas_dashboards import (
@@ -19,6 +19,7 @@ from app.schemas_dashboards import (
     VormTargetSchema,
 )
 from app.services.periodization import WeekFocus as ServiceWeekFocus
+from app.services.platform_admin import ModuleKey
 from app.services.session_composition import (
     OEFENVORM_LIBRARY,
     VormTarget,
@@ -30,7 +31,11 @@ from app.services.session_composition import (
 )
 from app.services.team_readiness import PlayerFlag
 
-router = APIRouter(prefix="/api/training-sessions", tags=["training-sessions"])
+router = APIRouter(
+    prefix="/api/training-sessions",
+    tags=["training-sessions"],
+    dependencies=[Depends(require_module(ModuleKey.NEXT_TRAINING))],
+)
 
 
 def _get_session_or_404(session_id: uuid.UUID, current_user: User, db: Session) -> DbTrainingSession:

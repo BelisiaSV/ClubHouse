@@ -44,6 +44,11 @@ class CycleWeekSchema(BaseModel):
 class TrainingCycleSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    # Set only by DB-backed endpoints (GET/PATCH .../cycles/*) so the
+    # frontend can reference a specific persisted cycle by id; None on the
+    # bare pure-calculator responses (build/reschedule), which never had an
+    # id to begin with.
+    id: Optional[uuid.UUID] = None
     name: str
     length_weeks: int
     start_date: date
@@ -85,6 +90,24 @@ class QueueNextCycleRequest(BaseModel):
     target_match_date: date
     target_peak_weekly_km: float = 25.0
     name: Optional[str] = None
+
+
+class CurrentCyclesResponse(BaseModel):
+    active: Optional[TrainingCycleSchema] = None
+    queued: Optional[TrainingCycleSchema] = None
+
+
+class PatchActiveCycleRequest(BaseModel):
+    # Deliberately only the safe, non-destructive fields: length_weeks/
+    # start_date aren't editable here because the active cycle's weeks
+    # already have dates baked in and distance logs already reference them
+    # by training_cycle_id/week_number (see app/routers/matches.py) —
+    # changing either would need a full rebuild that could silently corrupt
+    # that history. Use POST /cycles to replace the active cycle outright
+    # if a structural change is really needed.
+    name: Optional[str] = None
+    target_match_date: Optional[date] = None
+    target_peak_weekly_km: Optional[float] = None
 
 
 # ---- mas_testing.py router ----

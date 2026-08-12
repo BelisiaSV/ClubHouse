@@ -127,10 +127,10 @@ export default function Compensation() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto py-10 px-4 space-y-5">
+    <div className="max-w-4xl mx-auto py-12 px-4 space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-white mb-1">MAS &amp; Compensatiepaneel</h1>
-        <p className="text-sm text-gray-400 max-w-2xl">
+        <h1 className="text-3xl font-bold text-white tracking-tight mb-1.5">MAS &amp; Compensatiepaneel</h1>
+        <p className="text-sm text-gray-400 max-w-2xl leading-relaxed">
           Kies een wedstrijd en stel per speler zijn status of exacte speelminuten in. Spelers onder de
           drempel krijgen een MAS-gebaseerd inhaalprogramma.
         </p>
@@ -139,12 +139,9 @@ export default function Compensation() {
       {matchesError && <p className="text-red-400 text-sm">{matchesError}</p>}
 
       {matches.length === 0 && !matchesError && (
-        <div className="bg-gray-800 rounded-lg p-8 text-center space-y-3">
+        <div className="bg-gray-900/60 border border-white/10 rounded-2xl p-10 text-center space-y-4 shadow-xl shadow-black/20">
           <p className="text-gray-400 text-sm">Nog geen wedstrijden ingegeven.</p>
-          <Link
-            to="/matches"
-            className="inline-block bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-md text-sm"
-          >
+          <Link to="/matches" className="inline-block btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium">
             Ga naar de kalender →
           </Link>
         </div>
@@ -152,12 +149,12 @@ export default function Compensation() {
 
       {matches.length > 0 && (
         <>
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className="text-sm text-gray-400">Wedstrijd</span>
+          <div className="flex items-center gap-3 flex-wrap bg-gray-900/60 border border-white/10 rounded-xl px-4 py-3">
+            <span className="text-sm text-gray-400 font-medium">Wedstrijd</span>
             <select
               value={selectedMatchId}
               onChange={(e) => setSelectedMatchId(e.target.value)}
-              className="bg-gray-800 text-white rounded-md px-3 py-2 text-sm"
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ring-brand"
             >
               {matches.map((m) => (
                 <option key={m.id} value={m.id}>
@@ -176,16 +173,16 @@ export default function Compensation() {
           {rowsError && <p className="text-red-400 text-sm">{rowsError}</p>}
 
           {!rowsLoading && !rowsError && rows.length > 0 && (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto bg-gray-900/60 border border-white/10 rounded-2xl shadow-xl shadow-black/20">
               <table className="w-full text-sm text-left text-gray-300 min-w-[760px]">
                 <thead>
-                  <tr className="text-[10px] uppercase tracking-wider text-gray-500">
-                    <th className="px-3 py-2 font-normal">Speler</th>
-                    <th className="px-3 py-2 font-normal">Status</th>
-                    <th className="px-3 py-2 font-normal">Minuten (override)</th>
-                    <th className="px-3 py-2 font-normal">MAS</th>
-                    <th className="px-3 py-2 font-normal">Compensatie</th>
-                    <th className="px-3 py-2 font-normal"></th>
+                  <tr className="text-[10px] uppercase tracking-wider text-gray-500 border-b border-white/10">
+                    <th className="px-4 py-3 font-medium">Speler</th>
+                    <th className="px-4 py-3 font-medium">Status</th>
+                    <th className="px-4 py-3 font-medium">Minuten (override)</th>
+                    <th className="px-4 py-3 font-medium">MAS</th>
+                    <th className="px-4 py-3 font-medium">Compensatie</th>
+                    <th className="px-4 py-3 font-medium"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -193,14 +190,14 @@ export default function Compensation() {
                     const save = rowSaveState[r.player_id];
                     const eligible = r.minutes_played < THRESHOLD_MIN;
                     return (
-                      <tr key={r.player_id} className="bg-gray-800 border-b border-gray-900">
-                        <td className="px-3 py-2">
+                      <tr key={r.player_id} className="border-b border-white/5 last:border-b-0 hover:bg-white/[0.03] transition-colors">
+                        <td className="px-4 py-3">
                           <div className="font-medium text-white">
                             {r.jersey_number != null ? `#${r.jersey_number} ` : ""}
                             {r.first_name} {r.last_name}
                           </div>
                         </td>
-                        <td className="px-3 py-2">
+                        <td className="px-4 py-3">
                           <select
                             value={r.selection_status}
                             onChange={(e) => handleStatusChange(r, e.target.value)}
@@ -213,7 +210,7 @@ export default function Compensation() {
                             ))}
                           </select>
                         </td>
-                        <td className="px-3 py-2">
+                        <td className="px-4 py-3">
                           <select
                             value={r.minutes_played}
                             onChange={(e) => handleMinutesChange(r, e.target.value)}
@@ -226,10 +223,10 @@ export default function Compensation() {
                             ))}
                           </select>
                         </td>
-                        <td className="px-3 py-2 text-gray-400">
+                        <td className="px-4 py-3 text-gray-400">
                           {r.mas_kmh != null ? `${r.mas_kmh} km/u` : "—"}
                         </td>
-                        <td className="px-3 py-2">
+                        <td className="px-4 py-3">
                           {eligible ? (
                             <span className="inline-flex text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-400">
                               In aanmerking
@@ -238,7 +235,7 @@ export default function Compensation() {
                             <span className="text-xs text-gray-500">{r.minutes_played}' gespeeld</span>
                           )}
                         </td>
-                        <td className="px-3 py-2 w-16">
+                        <td className="px-4 py-3 w-16">
                           {save?.state === "saving" && (
                             <span className="text-xs text-gray-500">Bezig…</span>
                           )}

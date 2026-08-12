@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_module
 from app.models import Player, PlayerWeeklyDistanceLog, User
 from app.models import TrainingCycle as DbTrainingCycle
 from app.schemas import (
@@ -20,8 +20,11 @@ from app.schemas import (
     PlayerUpdate,
     WeeklyDistanceOut,
 )
+from app.services.platform_admin import ModuleKey
 
-router = APIRouter(prefix="/api/players", tags=["players"])
+router = APIRouter(
+    prefix="/api/players", tags=["players"], dependencies=[Depends(require_module(ModuleKey.SQUAD_OVERVIEW))]
+)
 
 TEMPLATE_HEADERS = ["Rugnummer", "Naam", "Voornaam", "E-mailadres", "Telefoonnummer"]
 

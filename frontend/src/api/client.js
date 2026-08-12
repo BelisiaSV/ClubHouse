@@ -54,6 +54,14 @@ export const resetPassword = (token, newPassword) =>
 export const getMyClub = () => client.get("/api/clubs/me").then((res) => res.data);
 export const updateMyClub = (payload) => client.patch("/api/clubs/me", payload).then((res) => res.data);
 
+export const uploadClubLogo = (file) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  return client
+    .post("/api/clubs/me/logo", formData, { headers: { "Content-Type": "multipart/form-data" } })
+    .then((res) => res.data);
+};
+
 // ---- Players ----
 export const listPlayers = () => client.get("/api/players").then((res) => res.data);
 export const createPlayer = (payload) => client.post("/api/players", payload).then((res) => res.data);
@@ -100,6 +108,12 @@ export const generateForMatch = (matchId) =>
 // ---- Periodization: weekselector ----
 export const queueNextCycle = (payload) =>
   client.post("/api/periodization/cycles/queue-next", payload).then((res) => res.data);
+
+export const getCurrentCycles = () =>
+  client.get("/api/periodization/cycles/current").then((res) => res.data);
+
+export const patchActiveCycle = (payload) =>
+  client.patch("/api/periodization/cycles/active", payload).then((res) => res.data);
 
 // ---- MAS testing: protocols, recording, calendar ----
 export const getMasTestProtocols = () =>

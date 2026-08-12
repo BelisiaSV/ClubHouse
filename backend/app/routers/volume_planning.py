@@ -1,11 +1,16 @@
 from fastapi import APIRouter, Depends
 
-from app.deps import get_current_user
+from app.deps import get_current_user, require_module
 from app.models import User
 from app.schemas_dashboards import GenerateKmPlanRequest, WeeklyKmPlanSchema
+from app.services.platform_admin import ModuleKey
 from app.services.volume_planning import generate_cycle_km_plan
 
-router = APIRouter(prefix="/api/volume-planning", tags=["volume-planning"])
+router = APIRouter(
+    prefix="/api/volume-planning",
+    tags=["volume-planning"],
+    dependencies=[Depends(require_module(ModuleKey.NEXT_TRAINING))],
+)
 
 
 @router.post("/km-plan", response_model=list[WeeklyKmPlanSchema])

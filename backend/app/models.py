@@ -72,6 +72,22 @@ class WeekFocus(str, PyEnum):
     RECOVERY = "recovery"
 
 
+class ModuleKey(str, PyEnum):
+    """Mirrors app.services.platform_admin.ModuleKey — kept as a plain
+    str enum here (not imported from there) the same way every other DB
+    enum in this file mirrors its service-layer counterpart, so this
+    module stays importable without a services.platform_admin dependency."""
+
+    DASHBOARD = "dashboard"
+    SQUAD_OVERVIEW = "squad_overview"
+    MAS_COMPENSATIE = "mas_compensatie"
+    NEXT_TRAINING = "next_training"
+    KALENDER = "kalender"
+    MAS_TEST = "mas_test"
+    RETURN_TO_PLAY = "return_to_play"
+    VIDEO_ANALYSE = "video_analyse"
+
+
 def _values(enum_cls):
     return [member.value for member in enum_cls]
 
@@ -81,6 +97,7 @@ player_position_enum = PGEnum(PlayerPosition, name="player_position", values_cal
 match_status_enum = PGEnum(MatchStatus, name="match_status", values_callable=_values)
 cycle_length_enum = PGEnum(CycleLength, name="cycle_length", values_callable=_values)
 week_focus_enum = PGEnum(WeekFocus, name="week_focus", values_callable=_values)
+module_key_enum = PGEnum(ModuleKey, name="module_key", values_callable=_values)
 
 
 # =========================================================
@@ -452,3 +469,51 @@ class TrainingSession(Base):
     target_duration_min: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
     target_distance_km: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+# =========================================================
+# PLATFORM ADMIN (Jordy) — deliberately separate from clubs/users
+# =========================================================
+class PlatformAdmin(Base):
+    """Architecture option B from services/platform_admin.py's docstring:
+    a platform owner isn't club-bound, so rather than making users.club_id
+    nullable (which would put an exception into every club-scoped
+    users-row assumption elsewhere in this codebase), platform admins get
+    their own table and their own auth path entirely. No relationship to
+    Club/User on purpose — see app/core/security.py's
+    create_platform_admin_token()/app/deps.py's get_current_platform_admin
+    for the parallel (non club-scoped) JWT flow this table backs."""
+
+    __tablename__ = "platform_admins"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    email: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    hashed_password: Mapped[str] = mapped_column(Text, nullable=False)
+    full_name: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+# =========================================================
+# CLUB MODULES (per-club entitlements, set by the platform admin)
+# =========================================================
+class ClubModule(Base):
+    """One row per (club, module) the platform admin has ever touched —
+    mirrors services.platform_admin.ClubModuleSettings, but as an explicit
+    enabled flag per row (not presence-in-a-set) so toggling off is an
+    audited update rather than a delete. A module with no row for a club is
+    treated as disabled by app.deps.require_module, except for CORE_MODULES
+    (see there), which are always enabled regardless of this table."""
+
+    __tablename__ = "club_modules"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    club_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("clubs.id", ondelete="CASCADE"), nullable=False)
+    module_key: Mapped[ModuleKey] = mapped_column(module_key_enum, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    changed_by: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        UniqueConstraint("club_id", "module_key", name="club_modules_club_id_module_key_key"),
+    )

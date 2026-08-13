@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.periodization import CycleWeek, TrainingCycle, WeekFocus
 from app.services.team_readiness import PlayerReadiness
+from app.services.volume_planning import PlayerPosition
 
 
 # ---- Shared: CycleWeek / TrainingCycle ----
@@ -108,6 +109,57 @@ class PatchActiveCycleRequest(BaseModel):
     name: Optional[str] = None
     target_match_date: Optional[date] = None
     target_peak_weekly_km: Optional[float] = None
+
+
+# ---- Week-km-overview per position (GET .../training-cycles/{id}/km-overview) ----
+class PositionWeeklyKmSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    position: PlayerPosition
+    training_km: float
+    match_km: float
+    total_km: float
+
+
+class WeeklyKmOverviewSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    week_number: int
+    focus: WeekFocus
+    team_weekly_target_km: float
+    team_training_km: float
+    team_match_km: float
+    by_position: list[PositionWeeklyKmSchema]
+
+
+# ---- Season start / next-cycle split (POST /seasons, POST /seasons/{id}/next-cycle) ----
+class StartSeasonRequest(BaseModel):
+    name: str
+    start_date: date
+    length_weeks: Literal[4, 6, 8]
+    target_match_date: date
+    target_peak_weekly_km: float = 23.0
+
+
+class StartSeasonResponse(BaseModel):
+    # There's no persisted "seasons" table (a club's season is still just
+    # "all of its training_cycles rows", per load_season_from_db) — season_id
+    # is the club's own id, so it stays a stable, self-consistent handle for
+    # POST /seasons/{season_id}/next-cycle without a schema migration to add
+    # real multi-season history, which nothing else in the API supports yet.
+    season_id: uuid.UUID
+    cycle: TrainingCycleSchema
+
+
+class NextCycleRequest(BaseModel):
+    length_weeks: Literal[4, 6, 8]
+    target_match_date: date
+    target_peak_weekly_km: float = 25.0
+    name: Optional[str] = None
+    # Present only so the endpoint can explicitly reject it with a 400
+    # instead of silently ignoring it — queue_next_cycle() always derives
+    # the date server-side (end of the active cycle), never from the client.
+    start_date: Optional[date] = None
 
 
 # ---- mas_testing.py router ----

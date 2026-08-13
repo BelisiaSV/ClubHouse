@@ -15,7 +15,9 @@ ALLOWED_LOGO_CONTENT_TYPES = {
     "image/svg+xml": ".svg",
     "image/webp": ".webp",
 }
-MAX_LOGO_SIZE_BYTES = 2 * 1024 * 1024  # 2 MB
+MAX_LOGO_SIZE_BYTES = 4 * 1024 * 1024  # 4 MB — stays under Vercel serverless functions'
+# hard 4.5 MB request body ceiling once multipart overhead is added; not raisable further
+# on the current hosting without switching the upload off the request body entirely.
 
 
 @router.get("/me", response_model=ClubOut)
@@ -59,7 +61,7 @@ def upload_my_club_logo(
 
     contents = file.file.read()
     if len(contents) > MAX_LOGO_SIZE_BYTES:
-        raise HTTPException(status_code=400, detail="Logo mag maximaal 2 MB groot zijn.")
+        raise HTTPException(status_code=400, detail="Logo mag maximaal 4 MB groot zijn.")
 
     club = db.get(Club, current_user.club_id)
     try:

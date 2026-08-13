@@ -14,6 +14,8 @@ const inputClass =
   "bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 ring-brand placeholder:text-gray-600";
 const primaryButtonClass =
   "btn-brand text-white px-5 py-2.5 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed";
+// Kept in sync with backend/app/routers/clubs.py's MAX_LOGO_SIZE_BYTES.
+const MAX_LOGO_SIZE_BYTES = 4 * 1024 * 1024;
 
 export default function Settings() {
   const { club, refreshClub } = useAuth();
@@ -72,6 +74,13 @@ export default function Settings() {
   const handleLogoChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.size > MAX_LOGO_SIZE_BYTES) {
+      setLogoError(
+        `Dit bestand is ${(file.size / 1024 / 1024).toFixed(1)} MB — logo's mogen maximaal 4 MB zijn. Tip: verklein de afbeelding (bv. via squoosh.app) en probeer opnieuw.`
+      );
+      e.target.value = "";
+      return;
+    }
     setLogoUploading(true);
     setLogoError(null);
     try {
@@ -182,7 +191,7 @@ export default function Settings() {
               </label>
             </div>
             <p className="text-xs text-gray-500 font-normal mt-1">
-              PNG, JPEG, SVG of WebP, max 2 MB. Verschijnt automatisch als watermerk op elk scherm.
+              PNG, JPEG, SVG of WebP, max 4 MB. Verschijnt automatisch als watermerk op elk scherm.
             </p>
             {logoError && <p className="text-red-400 text-sm font-normal">{logoError}</p>}
           </div>

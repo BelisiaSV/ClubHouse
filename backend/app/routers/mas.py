@@ -3,12 +3,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_module
 from app.models import MasTest, Player, User
 from app.schemas import CompensationRequest, CompensationResponse
 from app.services.mas_compensation import calculate_hit_compensation
+from app.services.platform_admin import ModuleKey
 
-router = APIRouter(prefix="/mas", tags=["mas"])
+router = APIRouter(prefix="/mas", tags=["mas"], dependencies=[Depends(require_module(ModuleKey.MAS_COMPENSATIE))])
 
 
 @router.post("/compensation", response_model=CompensationResponse)

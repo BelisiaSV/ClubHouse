@@ -16,6 +16,17 @@ from app.services.makeup_programs import REFERENCE_MATCH_MINUTES
 from app.services.periodization import TrainingCycle, WeekFocus
 
 
+class PlayerPosition(str, Enum):
+    GK = "GK"
+    CB = "CB"
+    FB = "FB"
+    DM = "DM"
+    CM = "CM"
+    AM = "AM"
+    WNG = "WNG"
+    ST = "ST"
+
+
 @dataclass
 class WeeklyKmPlan:
     week_number: int
@@ -66,6 +77,33 @@ def generate_cycle_km_plan(
     return plans
 
 
+# --- Kilometerdoel per positie -----------------------------------------
+# GPS-onderzoek in het voetbal toont consistent dat buitenspelers en
+# centrale middenvelders doorgaans meer afstand afleggen dan centrale
+# verdedigers of doelmannen. km_per_training uit het weekplan is een
+# TEAMGEMIDDELDE; deze gewichten herverdelen dat gemiddelde realistischer
+# per positie. Instelbaar per club — de standaardwaarden zijn een
+# redelijk uitgangspunt, geen exacte wet.
+DEFAULT_POSITION_KM_WEIGHTS = {
+    PlayerPosition.GK: 0.55,
+    PlayerPosition.CB: 0.85,
+    PlayerPosition.FB: 1.05,
+    PlayerPosition.DM: 0.95,
+    PlayerPosition.CM: 1.15,
+    PlayerPosition.AM: 1.05,
+    PlayerPosition.WNG: 1.15,
+    PlayerPosition.ST: 1.00,
+}
+
+
+def calculate_km_target_per_position(km_per_training: float, position_weights: Optional[dict] = None) -> dict:
+    """Herverdeelt het teamgemiddelde km_per_training (uit WeeklyKmPlan) naar
+    een doel per positie. position_weights laat de club de standaard-
+    gewichten overschrijven."""
+    weights = position_weights or DEFAULT_POSITION_KM_WEIGHTS
+    return {pos: round(km_per_training * weight, 2) for pos, weight in weights.items()}
+
+
 # --- Werkelijke wedstrijdafstand per speler, op basis van positie + minuten ---
 # Bron: CIES Football Observatory (gepoolde data, 7.855 wedstrijden) — gebruikt
 # als instelbaar UITGANGSPUNT. Amateurwedstrijden liggen doorgaans lager in
@@ -73,17 +111,6 @@ def generate_cycle_km_plan(
 # Vervangt NIET de teamplanning (generate_cycle_km_plan blijft de vooraf
 # geschatte weekbelasting bepalen) — dit berekent de WERKELIJKE, achteraf
 # vastgestelde bijdrage van een speler zodra zijn speelminuten gekend zijn.
-class PlayerPosition(str, Enum):
-    GK = "GK"
-    CB = "CB"
-    FB = "FB"
-    DM = "DM"
-    CM = "CM"
-    AM = "AM"
-    WNG = "WNG"
-    ST = "ST"
-
-
 POSITION_REFERENCE_MATCH_DISTANCE_KM = {
     PlayerPosition.GK: 5.0,
     PlayerPosition.CB: 9.6,
@@ -154,3 +181,72 @@ def populate_match_distance_for_week(match_appearances: list, week_number: int) 
             match_distance_km=distance,
         ))
     return logs
+
+
+# --- Week-km-overzicht per positie, per cyclusweek ------------------------
+# Voegt de kilometerplanning (generate_cycle_km_plan) en de positie-
+# gewichten hierboven samen tot ÉÉN overzicht: per week van de cyclus, per
+# positie, hoeveel km via training en hoeveel via de wedstrijd verwacht
+# wordt — samen gelijk aan het weektotaal van die fase.
+#
+# BELANGRIJK: de wedstrijd-km hier is de DEFAULT/verwachte waarde bij een
+# volledige wedstrijd (90'), gebruikt voor VOORAF plannen. Zodra de
+# werkelijke speelminuten gekend zijn, gebruik dan
+# calculate_player_match_distance() voor de WERKELIJKE afstand per speler
+# — dat kan afwijken van deze defaultwaarde.
+
+@dataclass
+class PositionWeeklyKm:
+    position: PlayerPosition
+    training_km: float      # totaal via training deze week (alle trainingen samen)
+    match_km: float          # verwachte wedstrijd-km (default: volledige wedstrijd, 90')
+    total_km: float
+
+
+@dataclass
+class WeeklyKmOverview:
+    week_number: int
+    focus: WeekFocus
+    team_weekly_target_km: float     # team-niveau totaal uit generate_cycle_km_plan()
+    team_training_km: float
+    team_match_km: float
+    by_position: list                # list[PositionWeeklyKm]
+
+
+def generate_weekly_km_overview_by_position(
+    cycle: TrainingCycle,
+    avg_match_distance_km: float = DEFAULT_AVG_MATCH_DISTANCE_KM,
+    training_position_weights: Optional[dict] = None,
+    match_position_refs: Optional[dict] = None,
+) -> list:
+    """Genereert voor ELKE week van de cyclus een volledig km-overzicht per
+    positie: trainings-km + wedstrijd-km apart weergegeven, samen gelijk
+    aan (of zeer dicht bij) het teamtotaal van die week."""
+    training_weights = training_position_weights or DEFAULT_POSITION_KM_WEIGHTS
+    match_refs = match_position_refs or POSITION_REFERENCE_MATCH_DISTANCE_KM
+
+    km_plans = generate_cycle_km_plan(cycle, avg_match_distance_km=avg_match_distance_km)
+
+    overviews = []
+    for week, plan in zip(cycle.weeks, km_plans):
+        weekly_training_total = plan.km_per_training * week.num_trainings
+
+        by_position = []
+        for position in PlayerPosition:
+            position_training_km = round(
+                (training_weights.get(position, 1.0)) * plan.km_per_training * week.num_trainings, 2
+            )
+            position_match_km = round(match_refs.get(position, avg_match_distance_km) * week.num_matches, 2)
+            by_position.append(PositionWeeklyKm(
+                position=position, training_km=position_training_km,
+                match_km=position_match_km, total_km=round(position_training_km + position_match_km, 2),
+            ))
+
+        overviews.append(WeeklyKmOverview(
+            week_number=week.week_number, focus=week.focus,
+            team_weekly_target_km=plan.weekly_target_km,
+            team_training_km=round(weekly_training_total, 2),
+            team_match_km=plan.match_distance_km,
+            by_position=by_position,
+        ))
+    return overviews

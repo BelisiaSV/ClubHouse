@@ -15,7 +15,9 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import ENUM as PGEnum
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -72,6 +74,34 @@ class WeekFocus(str, PyEnum):
     RECOVERY = "recovery"
 
 
+class ExternalLoadCategory(str, PyEnum):
+    """Context-only field on RpeWellnessData: non-football load (school/work)
+    that can explain an otherwise-alarming fatigue score. Deliberately never
+    read by _wellness_composite() or the ACWR calc (app.services.team_readiness)
+    — see that module's docstring note — it's for the coach to see, not for
+    the flagging math to act on."""
+
+    NONE = "none"
+    LIGHT = "light"
+    PHYSICAL = "physical"
+
+
+class ModuleKey(str, PyEnum):
+    """Mirrors app.services.platform_admin.ModuleKey — kept as a plain
+    str enum here (not imported from there) the same way every other DB
+    enum in this file mirrors its service-layer counterpart, so this
+    module stays importable without a services.platform_admin dependency."""
+
+    DASHBOARD = "dashboard"
+    SQUAD_OVERVIEW = "squad_overview"
+    MAS_COMPENSATIE = "mas_compensatie"
+    NEXT_TRAINING = "next_training"
+    KALENDER = "kalender"
+    MAS_TEST = "mas_test"
+    RETURN_TO_PLAY = "return_to_play"
+    VIDEO_ANALYSE = "video_analyse"
+
+
 def _values(enum_cls):
     return [member.value for member in enum_cls]
 
@@ -81,6 +111,10 @@ player_position_enum = PGEnum(PlayerPosition, name="player_position", values_cal
 match_status_enum = PGEnum(MatchStatus, name="match_status", values_callable=_values)
 cycle_length_enum = PGEnum(CycleLength, name="cycle_length", values_callable=_values)
 week_focus_enum = PGEnum(WeekFocus, name="week_focus", values_callable=_values)
+external_load_category_enum = PGEnum(
+    ExternalLoadCategory, name="external_load_category", values_callable=_values
+)
+module_key_enum = PGEnum(ModuleKey, name="module_key", values_callable=_values)
 
 
 # =========================================================
@@ -96,6 +130,12 @@ class Club(Base):
     primary_color: Mapped[str | None] = mapped_column(Text)
     secondary_color: Mapped[str | None] = mapped_column(Text)
     competition_level: Mapped[str | None] = mapped_column(Text)
+    # Weekday numbers (0=Monday..6=Sunday) the club trains on by default. Not
+    # set by anything yet — a coach configures it in Settings — and is the
+    # only source app.services.rpe_wellness.is_session_day() has for
+    # "training day", since training_cycle_weeks tracks periodization at
+    # whole-week granularity, not specific weekdays.
+    training_weekdays: Mapped[list[int] | None] = mapped_column(ARRAY(Integer))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
     users: Mapped[list["User"]] = relationship(back_populates="club", cascade="all, delete-orphan")
@@ -300,6 +340,14 @@ class RpeWellnessData(Base):
     mood: Mapped[int | None] = mapped_column(Integer)
     injury_flag: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     injury_note: Mapped[str | None] = mapped_column(Text)
+    # Context-only fields (school/work load, other sport that day) — visible
+    # to the coach next to a notable score, deliberately NOT read by
+    # _wellness_composite() or the ACWR calc (app.services.team_readiness):
+    # they'd explain a flag, not soften it, and folding them into the
+    # formula would be an unvalidated guess at how much weight to give them.
+    external_load_category: Mapped[ExternalLoadCategory | None] = mapped_column(external_load_category_enum)
+    extra_activity_today: Mapped[bool | None] = mapped_column(Boolean)
+    extra_activity_note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
     __table_args__ = (
@@ -331,6 +379,11 @@ class TrainingCycle(Base):
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     target_match_date: Mapped[date] = mapped_column(Date, nullable=False)
     target_match_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("matches.id"))
+    # Was accepted in BuildCycleRequest/QueueNextCycleRequest but never had a
+    # column to land in — every cycle silently fell back to the service
+    # dataclass's 25.0 default on every reload. Needed for a correct
+    # generate_cycle_km_plan()/generate_weekly_km_overview_by_position().
+    target_peak_weekly_km: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False, server_default="25.00")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     shift_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
@@ -442,7 +495,12 @@ class TrainingSession(Base):
     endpoints can be called against it by id across separate requests instead
     of the frontend re-sending the whole proposal. Created as a side effect
     of POST /api/team-readiness/propose-training (see that router) — that's
-    "the already-existing session" the two oefenvormen endpoints act on."""
+    "the already-existing session" the two oefenvormen endpoints act on.
+
+    session_date/blocks/skipped_vormen/finalized_at are only set once a
+    coach actually finalizes the session (POST .../finalize) — before that,
+    a row here is just a proposal-in-progress, not yet "a session that
+    happened", so finalized_at is what GET .../recent filters on."""
 
     __tablename__ = "training_sessions"
 
@@ -451,4 +509,60 @@ class TrainingSession(Base):
     week_focus: Mapped[WeekFocus] = mapped_column(week_focus_enum, nullable=False)
     target_duration_min: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
     target_distance_km: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
+    session_date: Mapped[date | None] = mapped_column(Date)
+    # list[dict] snapshot of the finalized VormTarget blocks (vorm, label,
+    # duration_min, distance_km, num_bouts, ...) — kept as JSON rather than
+    # normalized rows since this is a read-mostly historical snapshot, never
+    # queried block-by-block.
+    blocks: Mapped[list | None] = mapped_column(JSONB)
+    skipped_vormen: Mapped[list | None] = mapped_column(JSONB)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+# =========================================================
+# PLATFORM ADMIN (Jordy) — deliberately separate from clubs/users
+# =========================================================
+class PlatformAdmin(Base):
+    """Architecture option B from services/platform_admin.py's docstring:
+    a platform owner isn't club-bound, so rather than making users.club_id
+    nullable (which would put an exception into every club-scoped
+    users-row assumption elsewhere in this codebase), platform admins get
+    their own table and their own auth path entirely. No relationship to
+    Club/User on purpose — see app/core/security.py's
+    create_platform_admin_token()/app/deps.py's get_current_platform_admin
+    for the parallel (non club-scoped) JWT flow this table backs."""
+
+    __tablename__ = "platform_admins"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    email: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    hashed_password: Mapped[str] = mapped_column(Text, nullable=False)
+    full_name: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+# =========================================================
+# CLUB MODULES (per-club entitlements, set by the platform admin)
+# =========================================================
+class ClubModule(Base):
+    """One row per (club, module) the platform admin has ever touched —
+    mirrors services.platform_admin.ClubModuleSettings, but as an explicit
+    enabled flag per row (not presence-in-a-set) so toggling off is an
+    audited update rather than a delete. A module with no row for a club is
+    treated as disabled by app.deps.require_module, except for CORE_MODULES
+    (see there), which are always enabled regardless of this table."""
+
+    __tablename__ = "club_modules"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    club_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("clubs.id", ondelete="CASCADE"), nullable=False)
+    module_key: Mapped[ModuleKey] = mapped_column(module_key_enum, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    changed_by: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        UniqueConstraint("club_id", "module_key", name="club_modules_club_id_module_key_key"),
+    )

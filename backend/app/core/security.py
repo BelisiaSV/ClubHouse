@@ -22,7 +22,19 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(subject: str, club_id: str) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {"sub": subject, "club_id": club_id, "exp": expire}
+    payload = {"sub": subject, "club_id": club_id, "scope": "club_user", "exp": expire}
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def create_platform_admin_token(subject: str) -> str:
+    """Deliberately shaped differently from create_access_token(): no
+    club_id claim (a platform admin isn't club-bound — see
+    app.services.platform_admin's architecture note) and an explicit
+    scope='platform_admin' claim that app.deps.get_current_platform_admin
+    requires and app.deps.get_current_user rejects, so a token minted here
+    can never be replayed against a club-scoped endpoint or vice versa."""
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    payload = {"sub": subject, "scope": "platform_admin", "exp": expire}
     return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 

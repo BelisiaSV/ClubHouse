@@ -17,13 +17,14 @@ back up server-side instead of taking it from the request body.
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.periodization import CycleWeek, TrainingCycle, WeekFocus
 from app.services.team_readiness import PlayerReadiness
+from app.services.volume_planning import PlayerPosition
 
 
 # ---- Shared: CycleWeek / TrainingCycle ----
@@ -44,6 +45,11 @@ class CycleWeekSchema(BaseModel):
 class TrainingCycleSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    # Set only by DB-backed endpoints (GET/PATCH .../cycles/*) so the
+    # frontend can reference a specific persisted cycle by id; None on the
+    # bare pure-calculator responses (build/reschedule), which never had an
+    # id to begin with.
+    id: Optional[uuid.UUID] = None
     name: str
     length_weeks: int
     start_date: date
@@ -85,6 +91,75 @@ class QueueNextCycleRequest(BaseModel):
     target_match_date: date
     target_peak_weekly_km: float = 25.0
     name: Optional[str] = None
+
+
+class CurrentCyclesResponse(BaseModel):
+    active: Optional[TrainingCycleSchema] = None
+    queued: Optional[TrainingCycleSchema] = None
+
+
+class PatchActiveCycleRequest(BaseModel):
+    # Deliberately only the safe, non-destructive fields: length_weeks/
+    # start_date aren't editable here because the active cycle's weeks
+    # already have dates baked in and distance logs already reference them
+    # by training_cycle_id/week_number (see app/routers/matches.py) —
+    # changing either would need a full rebuild that could silently corrupt
+    # that history. Use POST /cycles to replace the active cycle outright
+    # if a structural change is really needed.
+    name: Optional[str] = None
+    target_match_date: Optional[date] = None
+    target_peak_weekly_km: Optional[float] = None
+
+
+# ---- Week-km-overview per position (GET .../training-cycles/{id}/km-overview) ----
+class PositionWeeklyKmSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    position: PlayerPosition
+    training_km: float
+    match_km: float
+    total_km: float
+
+
+class WeeklyKmOverviewSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    week_number: int
+    focus: WeekFocus
+    team_weekly_target_km: float
+    team_training_km: float
+    team_match_km: float
+    by_position: list[PositionWeeklyKmSchema]
+
+
+# ---- Season start / next-cycle split (POST /seasons, POST /seasons/{id}/next-cycle) ----
+class StartSeasonRequest(BaseModel):
+    name: str
+    start_date: date
+    length_weeks: Literal[4, 6, 8]
+    target_match_date: date
+    target_peak_weekly_km: float = 23.0
+
+
+class StartSeasonResponse(BaseModel):
+    # There's no persisted "seasons" table (a club's season is still just
+    # "all of its training_cycles rows", per load_season_from_db) — season_id
+    # is the club's own id, so it stays a stable, self-consistent handle for
+    # POST /seasons/{season_id}/next-cycle without a schema migration to add
+    # real multi-season history, which nothing else in the API supports yet.
+    season_id: uuid.UUID
+    cycle: TrainingCycleSchema
+
+
+class NextCycleRequest(BaseModel):
+    length_weeks: Literal[4, 6, 8]
+    target_match_date: date
+    target_peak_weekly_km: float = 25.0
+    name: Optional[str] = None
+    # Present only so the endpoint can explicitly reject it with a 400
+    # instead of silently ignoring it — queue_next_cycle() always derives
+    # the date server-side (end of the active cycle), never from the client.
+    start_date: Optional[date] = None
 
 
 # ---- mas_testing.py router ----
@@ -228,6 +303,7 @@ class PlayerReadinessSchema(BaseModel):
     stress_level: int = Field(ge=1, le=5)
     mood: int = Field(ge=1, le=5)
     injury_flag: bool = False
+    weekly_acute_load_history: list[float] = Field(default_factory=list)
 
     def to_dataclass(self) -> PlayerReadiness:
         return PlayerReadiness(**self.model_dump())
@@ -250,6 +326,28 @@ class ProposeTrainingRequest(BaseModel):
     week: CycleWeekSchema
     players: list[PlayerReadinessSchema]
     km_per_training: float = Field(ge=0)
+
+
+class ProposeTrainingAutoRequest(BaseModel):
+    # Everything else (week, players) is loaded server-side from the active
+    # cycle/week + load_squad_readiness — see POST .../propose-training/auto.
+    km_per_training: float = Field(ge=0)
+
+
+class NextSessionSchema(BaseModel):
+    session_type: Literal["training", "match"]
+    session_date: date
+    label: str  # e.g. "di 4 aug" — see app/routers/team_readiness.py's _format_nl_date_short
+
+
+class NextTrainingOverviewSchema(BaseModel):
+    # For the four Next Training status tiles (see app/routers/team_readiness.py's
+    # /overview docstring for exactly what each count/field means).
+    squad_count: int
+    flagged_count: int
+    sessions_this_week: int
+    week_focus: Optional[WeekFocus] = None
+    next_session: Optional[NextSessionSchema] = None
 
 
 class TrainingProposalSchema(BaseModel):
@@ -355,6 +453,10 @@ class RecalculateCompositionRequest(BaseModel):
     blocks: list[VormTargetSchema]
     target_distance_km: float
     player_flags: Optional[list[PlayerFlagSchema]] = None
+    # Vormen the coach set to 0' (skip entirely) — removed from blocks via
+    # remove_skipped_blocks() before summing, never sent through as a
+    # 0-duration block (calculate_vorm_target/_by_reps reject that on purpose).
+    skip_vormen: Optional[list[str]] = None
 
 
 class RecalculateCompositionResponse(BaseModel):
@@ -368,6 +470,50 @@ class RecalculateCompositionResponse(BaseModel):
 class DryRunTopupRequest(BaseModel):
     remaining_distance_km: float
     team_avg_mas_kmh: float
+
+
+# ---- training_sessions.py router: finalize / recent / detail ----
+class FinalizeSessionRequest(BaseModel):
+    session_date: date
+    # The final block list — already excludes any skipped vormen (the
+    # frontend applies remove_skipped_blocks()'s result before finalizing,
+    # same as it does before displaying the recalculated totals).
+    blocks: list[VormTargetSchema]
+    # Kept separately (not re-derived from `blocks`) purely for display in
+    # the session detail view — "these vormen were proposed but the coach
+    # chose to skip them", not just "these vormen aren't here".
+    skip_vormen: Optional[list[str]] = None
+
+
+class RecentSessionSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    session_date: date
+    # "Sessie" column: the day name, or "Wedstrijd" if session_date falls on
+    # a real Match row for this club.
+    session_label: str
+    # "Type" column: short summary of the vormen actually applied, e.g.
+    # "Balbezit + MSG".
+    type_summary: str
+    # "Belasting" column: total km of the finalized composition.
+    total_distance_km: float
+    # "RPE" column: team average of all RpeWellnessData.rpe_score entries
+    # logged for this session_date — None if nobody filled one in yet.
+    team_avg_rpe: Optional[float] = None
+
+
+class TrainingSessionDetailSchema(BaseModel):
+    id: uuid.UUID
+    week_focus: WeekFocus
+    session_date: Optional[date] = None
+    target_duration_min: float
+    target_distance_km: float
+    blocks: list[VormTargetSchema] = Field(default_factory=list)
+    skipped_vormen: list[str] = Field(default_factory=list)
+    total_distance_km: float
+    total_work_duration_min: float
+    finalized_at: Optional[datetime] = None
 
 
 class WeeklyKmPlanSchema(BaseModel):

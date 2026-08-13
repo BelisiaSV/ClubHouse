@@ -5,12 +5,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_module
 from app.models import CalendarEvent as DbCalendarEvent
 from app.models import User
 from app.schemas_dashboards import CalendarEventSchema
+from app.services.platform_admin import ModuleKey
 
-router = APIRouter(prefix="/api/calendar", tags=["calendar"])
+router = APIRouter(
+    prefix="/api/calendar", tags=["calendar"], dependencies=[Depends(require_module(ModuleKey.KALENDER))]
+)
 
 
 @router.get("/events", response_model=list[CalendarEventSchema])

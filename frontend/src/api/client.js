@@ -1,6 +1,14 @@
 import axios from "axios";
 
-const client = axios.create();
+// Empty (the default) in local dev, where Vite's own dev-server proxy
+// (vite.config.js) forwards relative /api, /mas, /admin, /static paths to
+// the backend on :8000 — so requests stay relative and nothing changes.
+// Set to the deployed backend's own origin (e.g. a Vercel project URL) in
+// production, where frontend and backend are separate deployments with no
+// shared proxy, so every request needs to be absolute instead.
+const client = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL || "",
+});
 
 client.interceptors.request.use((config) => {
   const token = localStorage.getItem("access_token");
@@ -54,8 +62,17 @@ export const resetPassword = (token, newPassword) =>
 export const getMyClub = () => client.get("/api/clubs/me").then((res) => res.data);
 export const updateMyClub = (payload) => client.patch("/api/clubs/me", payload).then((res) => res.data);
 
+export const uploadClubLogo = (file) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  return client
+    .post("/api/clubs/me/logo", formData, { headers: { "Content-Type": "multipart/form-data" } })
+    .then((res) => res.data);
+};
+
 // ---- Players ----
 export const listPlayers = () => client.get("/api/players").then((res) => res.data);
+export const getSquadOverview = () => client.get("/api/players/squad-overview").then((res) => res.data);
 export const createPlayer = (payload) => client.post("/api/players", payload).then((res) => res.data);
 export const updatePlayer = (id, payload) => client.patch(`/api/players/${id}`, payload).then((res) => res.data);
 export const deletePlayer = (id) => client.delete(`/api/players/${id}`);
@@ -101,6 +118,15 @@ export const generateForMatch = (matchId) =>
 export const queueNextCycle = (payload) =>
   client.post("/api/periodization/cycles/queue-next", payload).then((res) => res.data);
 
+export const getCurrentCycles = () =>
+  client.get("/api/periodization/cycles/current").then((res) => res.data);
+
+export const patchActiveCycle = (payload) =>
+  client.patch("/api/periodization/cycles/active", payload).then((res) => res.data);
+
+export const getKmOverview = (cycleId) =>
+  client.get(`/api/periodization/training-cycles/${cycleId}/km-overview`).then((res) => res.data);
+
 // ---- MAS testing: protocols, recording, calendar ----
 export const getMasTestProtocols = () =>
   client.get("/api/mas-testing/protocols").then((res) => res.data);
@@ -115,5 +141,49 @@ export const getCalendarEvents = (eventType) =>
   client
     .get("/api/calendar/events", { params: eventType ? { event_type: eventType } : {} })
     .then((res) => res.data);
+
+// ---- RPE / wellness ----
+export const getRpeWellnessShouldPrompt = (date) =>
+  client.get("/api/rpe-wellness/should-prompt", { params: date ? { date } : {} }).then((res) => res.data);
+
+export const recordRpeWellness = (payload) =>
+  client.post("/api/rpe-wellness", payload).then((res) => res.data);
+
+// ---- Next Training: status tiles ----
+export const getNextTrainingOverview = () =>
+  client.get("/api/team-readiness/overview").then((res) => res.data);
+
+export const flagPlayers = (players) =>
+  client.post("/api/team-readiness/flags", { players }).then((res) => res.data);
+
+export const proposeTraining = (payload) =>
+  client.post("/api/team-readiness/propose-training", payload).then((res) => res.data);
+
+export const proposeTrainingAuto = (kmPerTraining) =>
+  client
+    .post("/api/team-readiness/propose-training/auto", { km_per_training: kmPerTraining })
+    .then((res) => res.data);
+
+// ---- Next Training: session composition (oefenvormen) ----
+export const getCompositionProposal = (sessionId, payload) =>
+  client.post(`/api/training-sessions/${sessionId}/composition-proposal`, payload).then((res) => res.data);
+
+export const getVormTarget = (sessionId, payload) =>
+  client.post(`/api/training-sessions/${sessionId}/vorm-target`, payload).then((res) => res.data);
+
+export const recalculateComposition = (sessionId, payload) =>
+  client.post(`/api/training-sessions/${sessionId}/recalculate`, payload).then((res) => res.data);
+
+export const dryRunTopup = (payload) =>
+  client.post("/api/training-sessions/dry-run-topup", payload).then((res) => res.data);
+
+export const finalizeSession = (sessionId, payload) =>
+  client.post(`/api/training-sessions/${sessionId}/finalize`, payload).then((res) => res.data);
+
+export const getRecentSessions = (limit) =>
+  client.get("/api/training-sessions/recent", { params: limit ? { limit } : {} }).then((res) => res.data);
+
+export const getSessionDetail = (sessionId) =>
+  client.get(`/api/training-sessions/${sessionId}`).then((res) => res.data);
 
 export default client;

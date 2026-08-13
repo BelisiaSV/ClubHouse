@@ -1,9 +1,14 @@
 import logging
+import os
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
+from app.core.storage import USING_SUPABASE_STORAGE
 from app.routers import (
+    admin,
     auth,
     calendar,
     clubs,
@@ -13,6 +18,7 @@ from app.routers import (
     matches,
     periodization,
     players,
+    rpe_wellness,
     team_readiness,
     training_sessions,
     volume_planning,
@@ -24,9 +30,17 @@ if not logging.getLogger("clubhouse.email").handlers:
 
 app = FastAPI(title="ClubHouse Football SaaS API", version="0.6.0")
 
+# Comma-separated, e.g. "https://clubhouse.vercel.app,https://clubhouse-staging.vercel.app" —
+# defaults to just the local Vite dev server so nothing extra needs configuring locally.
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -35,6 +49,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(clubs.router)
 app.include_router(players.router)
+app.include_router(rpe_wellness.router)
 app.include_router(matches.router)
 app.include_router(mas.router)
 app.include_router(periodization.router)
@@ -44,6 +59,15 @@ app.include_router(team_readiness.router)
 app.include_router(volume_planning.router)
 app.include_router(calendar.router)
 app.include_router(training_sessions.router)
+app.include_router(admin.router)
+
+if not USING_SUPABASE_STORAGE:
+    # Local-disk logo storage mode only (see app/core/storage.py) — skipped
+    # entirely when Supabase Storage is configured, since Vercel's deployment
+    # filesystem is read-only and this mkdir would raise on cold start there.
+    STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+    STATIC_DIR.mkdir(exist_ok=True)
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/api/health")

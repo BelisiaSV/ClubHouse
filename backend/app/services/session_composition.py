@@ -203,14 +203,73 @@ def _field_dimension_hint(vorm: OefenvormType, per_side: int) -> str:
     return f", veld {guide['pitch_m']}m, {per_side} veldspelers per team"
 
 
+# Canonieke groepsgrootte per partijvorm — spelers worden verdeeld in
+# volledige groepen van deze grootte, i.p.v. de groep simpelweg in twee
+# gedeeld. SSG draait meerdere kleine partijtjes TEGELIJK (goed te
+# overzien voor één coach); MSG/LSG draaien als ÉÉN partij op één veld,
+# met eventuele overtallige spelers die per bout rouleren (roterende
+# invaller/rust) — een coach kan realistisch maar één groter veld
+# tegelijk begeleiden.
+CANONICAL_TEAM_SIZE = {
+    OefenvormType.SSG: 3,   # groepen van 3 -> meerdere 3v3-veldjes tegelijk
+    OefenvormType.MSG: 6,   # groepen van 6 -> één 6v6, rest rouleert
+    OefenvormType.LSG: 9,   # groepen van 9 -> één 9v9, rest rouleert
+}
+
+
+def calculate_group_setup(vorm: OefenvormType, num_players: int) -> str:
+    """
+    Vertaalt het aantal aanwezige spelers naar een concrete groepsindeling
+    voor de gekozen partijvorm, afgestemd op de canonieke teamgrootte.
+
+    - SSG: zoveel mogelijk VOLLEDIGE, gelijktijdige NvN-veldjes (bv. 18
+      spelers -> 6 groepen van 3 -> 3x 3v3 tegelijk, niemand aan de kant).
+    - MSG/LSG: ÉÉN partij op de canonieke teamgrootte; overtallige spelers
+      (geen volledig extra team) rouleren tussen de bouts.
+    - Is de groep te klein voor de canonieke teamgrootte (bv. maar 8
+      spelers voor MSG), dan wordt de teamgrootte automatisch verkleind
+      tot wat wél haalbaar is, met een duidelijke notitie.
+    """
+    if vorm not in CANONICAL_TEAM_SIZE:
+        return ""
+    size = CANONICAL_TEAM_SIZE[vorm]
+    num_groups = num_players // size
+
+    if vorm == OefenvormType.SSG:
+        if num_groups < 2:
+            fallback = max(2, num_players // 2)
+            return f" ({fallback}v{fallback}, aangepast aan {num_players} spelers)"
+        num_games = num_groups // 2
+        players_active = num_games * 2 * size
+        resting = num_players - players_active
+        rest_note = f", {resting} spelers wisselen/rusten" if resting else ""
+        return f" ({num_games}x {size}v{size} tegelijk{rest_note}{_field_dimension_hint(vorm, size)})"
+
+    # MSG / LSG: één partij, rest rouleert
+    if num_groups < 2:
+        fallback = max(2, num_players // 2)
+        return f" ({fallback}v{fallback}, aangepast aan {num_players} spelers)"
+    resting = num_players - (2 * size)
+    if resting > 0:
+        num_resting_groups = resting // size
+        rest_note = f" — {resting} spelers ({num_resting_groups}e groep) rust, rouleert per bout"
+    else:
+        rest_note = ""
+    return f" ({size}v{size}{rest_note}{_field_dimension_hint(vorm, size)})"
+
+
 def _suggested_format_label(vorm: OefenvormType, num_players: int) -> str:
-    """Houdt rekening met de MAXIMALE teamgrootte per vormtype (bv. SSG
-    blijft max. 5v5, ook bij een grote groep), stelt rotatie voor wanneer
-    er meer spelers zijn dan één veld aankan, en voegt een veldmaathint toe
-    (zie FIELD_DIMENSION_GUIDE)."""
+    """Voegt de groepsindeling (calculate_group_setup) toe voor SSG/MSG/LSG.
+    Voor andere spelersgevoelige vormen (bv. transitie) blijft de eenvoudige
+    helft-van-de-groep-benadering gelden — die vormen hebben geen vaste
+    'sided game'-structuur."""
     profile = OEFENVORM_LIBRARY[vorm]
     if not profile.player_count_sensitive:
         return ""
+    if vorm in CANONICAL_TEAM_SIZE:
+        return calculate_group_setup(vorm, num_players)
+
+    # Fallback voor transitie e.d. (geen canonieke groepsgrootte)
     natural_per_side = max(2, num_players // 2)
     cap = FORMAT_MAX_PLAYERS_PER_SIDE.get(vorm)
     if cap is not None and natural_per_side > cap:
@@ -434,6 +493,21 @@ def propose_session_composition(
         deviation_note=summary["deviation_note"],
         optional_dry_run_topup=optional_topup,
     )
+
+
+def remove_skipped_blocks(blocks: list, skip_vormen: Optional[list] = None) -> list:
+    """
+    Verwerkt de 'deze vorm op 0' zetten'-actie van de coach: het platform
+    doet een voorstel, de coach mag elk blok naar 0' zetten om het volledig
+    over te slaan — dit is nooit verplichte oefenstof. Verwijder de
+    overgeslagen vormen hier UIT de blokkenlijst vóór je summarize_composition()
+    aanroept (calculate_vorm_target/_by_reps accepteren zelf geen 0-waarden,
+    want '0 van een vorm' is conceptueel 'geen blok', niet 'een blok van
+    lengte 0').
+    """
+    if not skip_vormen:
+        return list(blocks)
+    return [b for b in blocks if b.vorm not in skip_vormen]
 
 
 def summarize_composition(blocks: list, target_distance_km: float, player_flags: Optional[list] = None) -> dict:

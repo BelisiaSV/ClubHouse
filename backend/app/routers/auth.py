@@ -15,7 +15,9 @@ from app.core.security import (
 )
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import Club, PasswordResetAttempt, PasswordResetToken, User, UserRole
+from app.models import Club, ClubModule
+from app.models import ModuleKey as DbModuleKey
+from app.models import PasswordResetAttempt, PasswordResetToken, User, UserRole
 from app.schemas import (
     ForgotPasswordRequest,
     MessageResponse,
@@ -24,6 +26,7 @@ from app.schemas import (
     TokenResponse,
     UserOut,
 )
+from app.services.platform_admin import BASE_PACKAGE_MODULES
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -54,6 +57,15 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     club = Club(name=payload.club_name, slug=payload.club_slug)
     db.add(club)
     db.flush()
+
+    # Self-service signup gets the free base package immediately (same
+    # modules services.platform_admin.activate_base_package() would turn
+    # on) — only paid add-ons like video_analyse stay gated behind a
+    # platform admin actually enabling them. Without this, module-gating
+    # (app.deps.require_module) would default-deny a brand new club out of
+    # every feature the moment they finish registering.
+    for module_key in BASE_PACKAGE_MODULES:
+        db.add(ClubModule(club_id=club.id, module_key=DbModuleKey(module_key.value), enabled=True, changed_by="self-service registration"))
 
     user = User(
         club_id=club.id,

@@ -24,12 +24,16 @@ class PlayerReadiness:
     stress_level: int
     mood: int
     injury_flag: bool = False
+    # Laatste 3 (of meer) wekelijkse acute-load-metingen, oudste eerst,
+    # MEEST RECENTE LAATST (dus [3 weken geleden, 2 weken geleden, deze
+    # week]). Optioneel — als leeg, wordt enkel de momentopname gebruikt.
+    weekly_acute_load_history: list = field(default_factory=list)
 
 
 @dataclass
 class PlayerFlag:
     player_name: str
-    flag_type: str        # 'overload' | 'underload' | 'poor_recovery' | 'injured'
+    flag_type: str        # 'overload' | 'underload' | 'poor_recovery' | 'injured' | 'acwr_trending_up'
     detail: str
     recommendation: str
 
@@ -46,7 +50,27 @@ def _wellness_composite(player: PlayerReadiness) -> float:
     return round(sum(normalized) / len(normalized), 2)
 
 
-def _load_adjustment_factor(acwr: Optional[float], wellness: float) -> float:
+def _acwr_trending_up(weekly_acute_load_history: list, min_weeks: int = 3,
+                       min_total_increase_pct: float = 0.15) -> bool:
+    """
+    Detecteert een GELEIDELIJK STIJGENDE belasting over opeenvolgende weken,
+    ook al zit de ACWR nog onder de 1.5-alarmdrempel. Dit is vaak een
+    vroeger signaal dan de drempeloverschrijding zelf — sportwetenschappelijk
+    onderbouwd als 'ramping load' vóór blessurerisico. Vereist minstens
+    'min_weeks' metingen, elk hoger dan de vorige, met een totale stijging
+    van minstens 'min_total_increase_pct' over de hele periode.
+    """
+    if len(weekly_acute_load_history) < min_weeks:
+        return False
+    recent = weekly_acute_load_history[-min_weeks:]
+    monotonic_increase = all(recent[i] < recent[i + 1] for i in range(len(recent) - 1))
+    if not monotonic_increase or recent[0] <= 0:
+        return False
+    total_increase_pct = (recent[-1] - recent[0]) / recent[0]
+    return total_increase_pct >= min_total_increase_pct
+
+
+def _load_adjustment_factor(acwr: Optional[float], wellness: float, trending_up: bool = False) -> float:
     factor = 1.0
     if acwr is not None:
         if acwr > 1.5:
@@ -59,6 +83,10 @@ def _load_adjustment_factor(acwr: Optional[float], wellness: float) -> float:
         factor = min(factor, 0.70)
     elif wellness < 3.2:
         factor = min(factor, 0.85)
+    if trending_up:
+        # Milde extra correctie, ook als de absolute ACWR nog geen alarm geeft —
+        # het is de RICHTING die hier het signaal is, niet de huidige waarde.
+        factor = min(factor, 0.90)
     return factor
 
 
@@ -71,6 +99,8 @@ def flag_players(players: list) -> list:
                                      "Uitsluiten van teamtraining, individueel/revalidatieprogramma."))
             continue
         acwr, wellness = _acwr(p), _wellness_composite(p)
+        trending_up = _acwr_trending_up(p.weekly_acute_load_history)
+
         if acwr is not None and acwr > 1.5:
             flags.append(PlayerFlag(p.player_name, "overload",
                                      f"ACWR = {acwr} (>1.5, snelle belastingsopbouw).",
@@ -79,6 +109,15 @@ def flag_players(players: list) -> list:
             flags.append(PlayerFlag(p.player_name, "underload",
                                      f"ACWR = {acwr} (<0.8, mogelijk detraining).",
                                      "Kan een extra individuele MAS-gebaseerde sessie aan."))
+        elif trending_up:
+            flags.append(PlayerFlag(
+                p.player_name, "acwr_trending_up",
+                f"Acute belasting stijgt {len(p.weekly_acute_load_history[-3:])} weken op rij "
+                f"({p.weekly_acute_load_history[-3:]}), ACWR ({acwr}) zit nog onder de alarmdrempel.",
+                "Vroeg signaal — monitor komende week extra, geen directe reductie nodig maar geen "
+                "verdere opbouw forceren."
+            ))
+
         if wellness < 2.5:
             flags.append(PlayerFlag(p.player_name, "poor_recovery",
                                      f"Wellness-score {wellness}/5.",
@@ -125,7 +164,10 @@ def propose_next_training(week: CycleWeek, players: list, km_per_training: float
 
     fit_players = [p for p in players if not p.injury_flag]
     if fit_players:
-        factors = [_load_adjustment_factor(_acwr(p), _wellness_composite(p)) for p in fit_players]
+        factors = [
+            _load_adjustment_factor(_acwr(p), _wellness_composite(p), _acwr_trending_up(p.weekly_acute_load_history))
+            for p in fit_players
+        ]
         team_factor = round(sum(factors) / len(factors), 2)
     else:
         team_factor = 1.0

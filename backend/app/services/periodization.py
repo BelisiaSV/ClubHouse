@@ -197,6 +197,32 @@ def queue_next_cycle(
     return updated_cycle
 
 
+# --- Seizoensstart: expliciete eerste-cyclus-flow ------------------------
+# Elke trainer start zijn seizoen op een andere datum. De EERSTE cyclus van
+# een seizoen vraagt dus expliciet een startdatum; ELKE cyclus DAARNA (via
+# queue_next_cycle hierboven) sluit automatisch aan op het einde van de
+# vorige — geen datum meer nodig. Apart, herkenbaar entrypoint zodat
+# 'seizoen starten' en 'volgende cyclus kiezen' twee duidelijk gescheiden
+# acties in de API worden (app/routers/periodization.py's POST /seasons vs.
+# POST /seasons/{season_id}/next-cycle).
+
+def start_new_season(
+    name: str,
+    start_date: date,
+    length_weeks: int,
+    target_match_date: date,
+    target_peak_weekly_km: float = 23.0,
+) -> Season:
+    if length_weeks not in CYCLE_TEMPLATES:
+        raise ValueError(f"Ongeldige cycluslengte: {length_weeks} (kies 4, 6 of 8).")
+    season = Season(name=name)
+    add_cycle_to_season(
+        season, length_weeks=length_weeks, target_match_date=target_match_date,
+        target_peak_weekly_km=target_peak_weekly_km, name=f"{name} — Cyclus 1", start_date=start_date,
+    )
+    return season
+
+
 # =============================================================
 # 1. PERIODISERING: cyclus herberekenen bij afgelasting
 # =============================================================

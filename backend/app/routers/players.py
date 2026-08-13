@@ -9,19 +9,24 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_module
 from app.models import Player, PlayerWeeklyDistanceLog, User
 from app.models import TrainingCycle as DbTrainingCycle
+from app.routers._readiness import _normalized_wellness, load_squad_readiness
 from app.schemas import (
     PlayerCreate,
     PlayerImportError,
     PlayerImportResult,
     PlayerOut,
     PlayerUpdate,
+    SquadOverviewPlayerSchema,
     WeeklyDistanceOut,
 )
+from app.services.platform_admin import ModuleKey
 
-router = APIRouter(prefix="/api/players", tags=["players"])
+router = APIRouter(
+    prefix="/api/players", tags=["players"], dependencies=[Depends(require_module(ModuleKey.SQUAD_OVERVIEW))]
+)
 
 TEMPLATE_HEADERS = ["Rugnummer", "Naam", "Voornaam", "E-mailadres", "Telefoonnummer"]
 
@@ -128,6 +133,72 @@ def list_players(current_user: User = Depends(get_current_user), db: Session = D
     return db.scalars(
         select(Player).where(Player.club_id == current_user.club_id).order_by(Player.jersey_number.nulls_last())
     ).all()
+
+
+@router.get("/squad-overview", response_model=list[SquadOverviewPlayerSchema])
+def squad_overview(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Per-player readiness status for the Squad Overview grid: classifies
+    each player as fit / reductie / overbelast from their last 28 days of
+    RpeWellnessData, reusing the exact flag_players() rules the Next
+    Training proposal uses (app.services.team_readiness) so the two stay
+    consistent. A player with no wellness entries yet gets 'geen_data'
+    rather than a guessed 'fit', since there's no basis for either.
+
+    flag_players() is keyed by player_name (not id) — an existing
+    limitation of that service (two same-named players in one club would
+    collide), not something introduced here."""
+    squad = load_squad_readiness(current_user.club_id, db)
+
+    result = []
+    for sr in squad:
+        player = sr.player
+        if sr.readiness is None or sr.latest is None:
+            result.append(
+                SquadOverviewPlayerSchema(
+                    id=player.id,
+                    first_name=player.first_name,
+                    last_name=player.last_name,
+                    jersey_number=player.jersey_number,
+                    position=player.position,
+                    status="geen_data",
+                    acwr=None,
+                    latest_rpe=None,
+                    latest_wellness=None,
+                    flags=[],
+                )
+            )
+            continue
+
+        readiness = sr.readiness
+        latest = sr.latest
+        flag_types = {f.flag_type for f in sr.flags}
+        if "injured" in flag_types or "overload" in flag_types:
+            status = "overbelast"
+        elif "poor_recovery" in flag_types or "underload" in flag_types or "acwr_trending_up" in flag_types:
+            status = "reductie"
+        else:
+            status = "fit"
+
+        result.append(
+            SquadOverviewPlayerSchema(
+                id=player.id,
+                first_name=player.first_name,
+                last_name=player.last_name,
+                jersey_number=player.jersey_number,
+                position=player.position,
+                status=status,
+                acwr=(
+                    round(readiness.acute_load_7d / readiness.chronic_load_28d, 2)
+                    if readiness.chronic_load_28d > 0
+                    else None
+                ),
+                latest_rpe=latest.rpe_score,
+                latest_wellness=_normalized_wellness(latest),
+                flags=[f.detail for f in sr.flags],
+                flag_types=[f.flag_type for f in sr.flags],
+            )
+        )
+    return result
 
 
 @router.get("/{player_id}", response_model=PlayerOut)

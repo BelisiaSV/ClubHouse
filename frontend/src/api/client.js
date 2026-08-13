@@ -124,6 +124,9 @@ export const getCurrentCycles = () =>
 export const patchActiveCycle = (payload) =>
   client.patch("/api/periodization/cycles/active", payload).then((res) => res.data);
 
+export const getKmOverview = (cycleId) =>
+  client.get(`/api/periodization/training-cycles/${cycleId}/km-overview`).then((res) => res.data);
+
 // ---- MAS testing: protocols, recording, calendar ----
 export const getMasTestProtocols = () =>
   client.get("/api/mas-testing/protocols").then((res) => res.data);

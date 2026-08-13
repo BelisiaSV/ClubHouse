@@ -16,6 +16,16 @@ const primaryButtonClass =
   "btn-brand text-white px-5 py-2.5 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed";
 // Kept in sync with backend/app/routers/clubs.py's MAX_LOGO_SIZE_BYTES.
 const MAX_LOGO_SIZE_BYTES = 4 * 1024 * 1024;
+// 0=maandag .. 6=zondag, matching Python's date.weekday() (backend/app/services/rpe_wellness.py).
+const WEEKDAY_LABELS = [
+  { value: 0, label: "Ma" },
+  { value: 1, label: "Di" },
+  { value: 2, label: "Wo" },
+  { value: 3, label: "Do" },
+  { value: 4, label: "Vr" },
+  { value: 5, label: "Za" },
+  { value: 6, label: "Zo" },
+];
 
 export default function Settings() {
   const { club, refreshClub } = useAuth();
@@ -28,6 +38,11 @@ export default function Settings() {
 
   const [logoUploading, setLogoUploading] = useState(false);
   const [logoError, setLogoError] = useState(null);
+
+  const [trainingWeekdays, setTrainingWeekdays] = useState(club?.training_weekdays ?? []);
+  const [savingWeekdays, setSavingWeekdays] = useState(false);
+  const [weekdaysError, setWeekdaysError] = useState(null);
+  const [weekdaysSaved, setWeekdaysSaved] = useState(false);
 
   const [activeCycle, setActiveCycle] = useState(null);
   const [activeCycleForm, setActiveCycleForm] = useState({ name: "", target_match_date: "" });
@@ -91,6 +106,28 @@ export default function Settings() {
     } finally {
       setLogoUploading(false);
       e.target.value = "";
+    }
+  };
+
+  const toggleWeekday = (value) => {
+    setTrainingWeekdays((days) =>
+      days.includes(value) ? days.filter((d) => d !== value) : [...days, value].sort()
+    );
+  };
+
+  const handleSaveWeekdays = async (e) => {
+    e.preventDefault();
+    setSavingWeekdays(true);
+    setWeekdaysError(null);
+    setWeekdaysSaved(false);
+    try {
+      await updateMyClub({ training_weekdays: trainingWeekdays });
+      await refreshClub();
+      setWeekdaysSaved(true);
+    } catch (err) {
+      setWeekdaysError(err.response?.data?.detail ?? err.message);
+    } finally {
+      setSavingWeekdays(false);
     }
   };
 
@@ -222,6 +259,40 @@ export default function Settings() {
 
           <button type="submit" disabled={saving} className={primaryButtonClass}>
             {saving ? "Bezig…" : "Opslaan"}
+          </button>
+        </form>
+      </section>
+
+      <section>
+        <h2 className="text-lg font-semibold text-white mb-1">Trainingsdagen</h2>
+        <p className="text-sm text-gray-400 mb-4">
+          Op welke dagen traint de ploeg standaard? Dit bepaalt op welke dagen spelers gevraagd
+          worden om RPE en wellness in te vullen (samen met wedstrijddagen — die worden altijd
+          automatisch herkend).
+        </p>
+        <form onSubmit={handleSaveWeekdays} className={`${cardClass} space-y-5`}>
+          <div className="flex flex-wrap gap-2">
+            {WEEKDAY_LABELS.map(({ value, label }) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => toggleWeekday(value)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                  trainingWeekdays.includes(value)
+                    ? "nav-active-brand border-transparent"
+                    : "border-white/10 text-gray-400 hover:bg-white/5"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {weekdaysError && <p className="text-red-400 text-sm">{weekdaysError}</p>}
+          {weekdaysSaved && <p className="text-emerald-400 text-sm">Opgeslagen.</p>}
+
+          <button type="submit" disabled={savingWeekdays} className={primaryButtonClass}>
+            {savingWeekdays ? "Bezig…" : "Opslaan"}
           </button>
         </form>
       </section>

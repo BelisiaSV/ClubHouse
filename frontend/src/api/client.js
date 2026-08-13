@@ -139,4 +139,11 @@ export const getCalendarEvents = (eventType) =>
     .get("/api/calendar/events", { params: eventType ? { event_type: eventType } : {} })
     .then((res) => res.data);
 
+// ---- RPE / wellness ----
+export const getRpeWellnessShouldPrompt = (date) =>
+  client.get("/api/rpe-wellness/should-prompt", { params: date ? { date } : {} }).then((res) => res.data);
+
+export const recordRpeWellness = (payload) =>
+  client.post("/api/rpe-wellness", payload).then((res) => res.data);
+
 export default client;

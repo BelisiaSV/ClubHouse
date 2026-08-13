@@ -18,6 +18,7 @@ from app.routers import (
     matches,
     periodization,
     players,
+    rpe_wellness,
     team_readiness,
     training_sessions,
     volume_planning,
@@ -48,6 +49,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(clubs.router)
 app.include_router(players.router)
+app.include_router(rpe_wellness.router)
 app.include_router(matches.router)
 app.include_router(mas.router)
 app.include_router(periodization.router)

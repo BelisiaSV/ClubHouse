@@ -15,6 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import ENUM as PGEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -72,6 +73,18 @@ class WeekFocus(str, PyEnum):
     RECOVERY = "recovery"
 
 
+class ExternalLoadCategory(str, PyEnum):
+    """Context-only field on RpeWellnessData: non-football load (school/work)
+    that can explain an otherwise-alarming fatigue score. Deliberately never
+    read by _wellness_composite() or the ACWR calc (app.services.team_readiness)
+    — see that module's docstring note — it's for the coach to see, not for
+    the flagging math to act on."""
+
+    NONE = "none"
+    LIGHT = "light"
+    PHYSICAL = "physical"
+
+
 class ModuleKey(str, PyEnum):
     """Mirrors app.services.platform_admin.ModuleKey — kept as a plain
     str enum here (not imported from there) the same way every other DB
@@ -97,6 +110,9 @@ player_position_enum = PGEnum(PlayerPosition, name="player_position", values_cal
 match_status_enum = PGEnum(MatchStatus, name="match_status", values_callable=_values)
 cycle_length_enum = PGEnum(CycleLength, name="cycle_length", values_callable=_values)
 week_focus_enum = PGEnum(WeekFocus, name="week_focus", values_callable=_values)
+external_load_category_enum = PGEnum(
+    ExternalLoadCategory, name="external_load_category", values_callable=_values
+)
 module_key_enum = PGEnum(ModuleKey, name="module_key", values_callable=_values)
 
 
@@ -113,6 +129,12 @@ class Club(Base):
     primary_color: Mapped[str | None] = mapped_column(Text)
     secondary_color: Mapped[str | None] = mapped_column(Text)
     competition_level: Mapped[str | None] = mapped_column(Text)
+    # Weekday numbers (0=Monday..6=Sunday) the club trains on by default. Not
+    # set by anything yet — a coach configures it in Settings — and is the
+    # only source app.services.rpe_wellness.is_session_day() has for
+    # "training day", since training_cycle_weeks tracks periodization at
+    # whole-week granularity, not specific weekdays.
+    training_weekdays: Mapped[list[int] | None] = mapped_column(ARRAY(Integer))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
     users: Mapped[list["User"]] = relationship(back_populates="club", cascade="all, delete-orphan")
@@ -317,6 +339,14 @@ class RpeWellnessData(Base):
     mood: Mapped[int | None] = mapped_column(Integer)
     injury_flag: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     injury_note: Mapped[str | None] = mapped_column(Text)
+    # Context-only fields (school/work load, other sport that day) — visible
+    # to the coach next to a notable score, deliberately NOT read by
+    # _wellness_composite() or the ACWR calc (app.services.team_readiness):
+    # they'd explain a flag, not soften it, and folding them into the
+    # formula would be an unvalidated guess at how much weight to give them.
+    external_load_category: Mapped[ExternalLoadCategory | None] = mapped_column(external_load_category_enum)
+    extra_activity_today: Mapped[bool | None] = mapped_column(Boolean)
+    extra_activity_note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
     __table_args__ = (

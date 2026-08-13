@@ -1,5 +1,6 @@
 import uuid
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -112,6 +113,25 @@ class PlayerOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class SquadOverviewPlayerSchema(BaseModel):
+    """One row of GET /api/players/squad-overview — a player plus their
+    readiness status derived from recent RpeWellnessData via
+    app.services.team_readiness.flag_players(). 'geen_data' (rather than
+    defaulting to 'fit') is deliberate: a player with no wellness entries
+    yet has no basis for a status, so we say so instead of implying one."""
+
+    id: uuid.UUID
+    first_name: str
+    last_name: str
+    jersey_number: int | None
+    position: PlayerPosition | None
+    status: Literal["fit", "reductie", "overbelast", "geen_data"]
+    acwr: float | None
+    latest_rpe: int | None
+    latest_wellness: float | None
+    flags: list[str]
 
 
 class PlayerImportError(BaseModel):

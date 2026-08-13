@@ -17,7 +17,7 @@ back up server-side instead of taking it from the request body.
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -303,6 +303,7 @@ class PlayerReadinessSchema(BaseModel):
     stress_level: int = Field(ge=1, le=5)
     mood: int = Field(ge=1, le=5)
     injury_flag: bool = False
+    weekly_acute_load_history: list[float] = Field(default_factory=list)
 
     def to_dataclass(self) -> PlayerReadiness:
         return PlayerReadiness(**self.model_dump())
@@ -325,6 +326,28 @@ class ProposeTrainingRequest(BaseModel):
     week: CycleWeekSchema
     players: list[PlayerReadinessSchema]
     km_per_training: float = Field(ge=0)
+
+
+class ProposeTrainingAutoRequest(BaseModel):
+    # Everything else (week, players) is loaded server-side from the active
+    # cycle/week + load_squad_readiness — see POST .../propose-training/auto.
+    km_per_training: float = Field(ge=0)
+
+
+class NextSessionSchema(BaseModel):
+    session_type: Literal["training", "match"]
+    session_date: date
+    label: str  # e.g. "di 4 aug" — see app/routers/team_readiness.py's _format_nl_date_short
+
+
+class NextTrainingOverviewSchema(BaseModel):
+    # For the four Next Training status tiles (see app/routers/team_readiness.py's
+    # /overview docstring for exactly what each count/field means).
+    squad_count: int
+    flagged_count: int
+    sessions_this_week: int
+    week_focus: Optional[WeekFocus] = None
+    next_session: Optional[NextSessionSchema] = None
 
 
 class TrainingProposalSchema(BaseModel):
@@ -430,6 +453,10 @@ class RecalculateCompositionRequest(BaseModel):
     blocks: list[VormTargetSchema]
     target_distance_km: float
     player_flags: Optional[list[PlayerFlagSchema]] = None
+    # Vormen the coach set to 0' (skip entirely) — removed from blocks via
+    # remove_skipped_blocks() before summing, never sent through as a
+    # 0-duration block (calculate_vorm_target/_by_reps reject that on purpose).
+    skip_vormen: Optional[list[str]] = None
 
 
 class RecalculateCompositionResponse(BaseModel):
@@ -443,6 +470,50 @@ class RecalculateCompositionResponse(BaseModel):
 class DryRunTopupRequest(BaseModel):
     remaining_distance_km: float
     team_avg_mas_kmh: float
+
+
+# ---- training_sessions.py router: finalize / recent / detail ----
+class FinalizeSessionRequest(BaseModel):
+    session_date: date
+    # The final block list — already excludes any skipped vormen (the
+    # frontend applies remove_skipped_blocks()'s result before finalizing,
+    # same as it does before displaying the recalculated totals).
+    blocks: list[VormTargetSchema]
+    # Kept separately (not re-derived from `blocks`) purely for display in
+    # the session detail view — "these vormen were proposed but the coach
+    # chose to skip them", not just "these vormen aren't here".
+    skip_vormen: Optional[list[str]] = None
+
+
+class RecentSessionSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    session_date: date
+    # "Sessie" column: the day name, or "Wedstrijd" if session_date falls on
+    # a real Match row for this club.
+    session_label: str
+    # "Type" column: short summary of the vormen actually applied, e.g.
+    # "Balbezit + MSG".
+    type_summary: str
+    # "Belasting" column: total km of the finalized composition.
+    total_distance_km: float
+    # "RPE" column: team average of all RpeWellnessData.rpe_score entries
+    # logged for this session_date — None if nobody filled one in yet.
+    team_avg_rpe: Optional[float] = None
+
+
+class TrainingSessionDetailSchema(BaseModel):
+    id: uuid.UUID
+    week_focus: WeekFocus
+    session_date: Optional[date] = None
+    target_duration_min: float
+    target_distance_km: float
+    blocks: list[VormTargetSchema] = Field(default_factory=list)
+    skipped_vormen: list[str] = Field(default_factory=list)
+    total_distance_km: float
+    total_work_duration_min: float
+    finalized_at: Optional[datetime] = None
 
 
 class WeeklyKmPlanSchema(BaseModel):

@@ -66,6 +66,18 @@ export function LogoutIcon(props) {
   );
 }
 
+export function NextTrainingIcon(props) {
+  return (
+    <svg {...base} {...props}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M13.5 4.5 6 13.5h5.25L10.5 19.5 18 10.5h-5.25l.75-6Z"
+      />
+    </svg>
+  );
+}
+
 export function MenuIcon(props) {
   return (
     <svg {...base} {...props}>

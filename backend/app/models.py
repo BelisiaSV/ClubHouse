@@ -17,6 +17,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import ENUM as PGEnum
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -494,7 +495,12 @@ class TrainingSession(Base):
     endpoints can be called against it by id across separate requests instead
     of the frontend re-sending the whole proposal. Created as a side effect
     of POST /api/team-readiness/propose-training (see that router) — that's
-    "the already-existing session" the two oefenvormen endpoints act on."""
+    "the already-existing session" the two oefenvormen endpoints act on.
+
+    session_date/blocks/skipped_vormen/finalized_at are only set once a
+    coach actually finalizes the session (POST .../finalize) — before that,
+    a row here is just a proposal-in-progress, not yet "a session that
+    happened", so finalized_at is what GET .../recent filters on."""
 
     __tablename__ = "training_sessions"
 
@@ -503,6 +509,14 @@ class TrainingSession(Base):
     week_focus: Mapped[WeekFocus] = mapped_column(week_focus_enum, nullable=False)
     target_duration_min: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
     target_distance_km: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
+    session_date: Mapped[date | None] = mapped_column(Date)
+    # list[dict] snapshot of the finalized VormTarget blocks (vorm, label,
+    # duration_min, distance_km, num_bouts, ...) — kept as JSON rather than
+    # normalized rows since this is a read-mostly historical snapshot, never
+    # queried block-by-block.
+    blocks: Mapped[list | None] = mapped_column(JSONB)
+    skipped_vormen: Mapped[list | None] = mapped_column(JSONB)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 

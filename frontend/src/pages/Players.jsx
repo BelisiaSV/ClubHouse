@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   createPlayer,
   downloadImportTemplate,
@@ -44,6 +45,13 @@ const POSITION_LABELS = {
 };
 const POSITION_ORDER = ["GK", "CB", "FB", "DM", "CM", "AM", "WNG", "ST"];
 
+// Mirrors app/routers/team_readiness.py's ATTENTION_FLAG_TYPES — the exact
+// flag set the Next Training "Belast/overbelast/geblesseerd" tile counts,
+// so its ?filter=flagged link shows exactly that set here (deliberately
+// excludes "underload", a Squad Overview 'reductie' signal, not a
+// load-management concern for that tile).
+const ATTENTION_FLAG_TYPES = new Set(["overload", "poor_recovery", "acwr_trending_up", "injured"]);
+
 const STATUS_META = {
   fit: { label: "Fit", dot: "bg-emerald-500", badge: "bg-emerald-500/15 text-emerald-400", ring: "ring-emerald-500/30" },
   reductie: { label: "Reductie", dot: "bg-amber-500", badge: "bg-amber-500/15 text-amber-400", ring: "ring-amber-500/30" },
@@ -56,6 +64,9 @@ function initials(firstName, lastName) {
 }
 
 export default function Players() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const flaggedOnly = searchParams.get("filter") === "flagged";
+
   const [squad, setSquad] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -127,10 +138,19 @@ export default function Players() {
     return POSITION_ORDER.filter((pos) => present.has(pos));
   }, [squad]);
 
-  const filteredSquad = useMemo(
-    () => (positionFilter === "ALL" ? squad : squad.filter((p) => p.position === positionFilter)),
-    [squad, positionFilter]
-  );
+  const filteredSquad = useMemo(() => {
+    let result = positionFilter === "ALL" ? squad : squad.filter((p) => p.position === positionFilter);
+    if (flaggedOnly) {
+      result = result.filter((p) => (p.flag_types ?? []).some((t) => ATTENTION_FLAG_TYPES.has(t)));
+    }
+    return result;
+  }, [squad, positionFilter, flaggedOnly]);
+
+  const clearFlaggedFilter = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("filter");
+    setSearchParams(next);
+  };
 
   const openTestForm = (playerId) => {
     setTestPlayerId(playerId);
@@ -272,6 +292,17 @@ export default function Players() {
           {showAddForm ? "Annuleren" : "+ Speler toevoegen"}
         </button>
       </div>
+
+      {flaggedOnly && (
+        <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 rounded-2xl px-5 py-3.5 mb-6 text-sm flex items-center justify-between gap-3 flex-wrap">
+          <span>
+            Gefilterd op belast / overbelast / geblesseerd spelers (vanuit de Next Training-tegel).
+          </span>
+          <button onClick={clearFlaggedFilter} className="underline hover:opacity-80 shrink-0">
+            Filter wissen
+          </button>
+        </div>
+      )}
 
       {shouldPrompt?.is_session_day && (
         <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 rounded-2xl px-5 py-3.5 mb-6 text-sm">

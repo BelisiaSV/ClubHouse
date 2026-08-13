@@ -1,8 +1,16 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
-import { CalendarIcon, CompensationIcon, LogoutIcon, SettingsIcon, SquadIcon } from "./icons.jsx";
+import {
+  CalendarIcon,
+  CompensationIcon,
+  LogoutIcon,
+  NextTrainingIcon,
+  SettingsIcon,
+  SquadIcon,
+} from "./icons.jsx";
 
 const NAV_ITEMS = [
+  { to: "/next-training", label: "Next Training", Icon: NextTrainingIcon },
   { to: "/", end: true, label: "MAS & Compensatie", Icon: CompensationIcon },
   { to: "/players", label: "Squad", Icon: SquadIcon },
   { to: "/matches", label: "Kalender", Icon: CalendarIcon },

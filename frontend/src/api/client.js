@@ -149,4 +149,41 @@ export const getRpeWellnessShouldPrompt = (date) =>
 export const recordRpeWellness = (payload) =>
   client.post("/api/rpe-wellness", payload).then((res) => res.data);
 
+// ---- Next Training: status tiles ----
+export const getNextTrainingOverview = () =>
+  client.get("/api/team-readiness/overview").then((res) => res.data);
+
+export const flagPlayers = (players) =>
+  client.post("/api/team-readiness/flags", { players }).then((res) => res.data);
+
+export const proposeTraining = (payload) =>
+  client.post("/api/team-readiness/propose-training", payload).then((res) => res.data);
+
+export const proposeTrainingAuto = (kmPerTraining) =>
+  client
+    .post("/api/team-readiness/propose-training/auto", { km_per_training: kmPerTraining })
+    .then((res) => res.data);
+
+// ---- Next Training: session composition (oefenvormen) ----
+export const getCompositionProposal = (sessionId, payload) =>
+  client.post(`/api/training-sessions/${sessionId}/composition-proposal`, payload).then((res) => res.data);
+
+export const getVormTarget = (sessionId, payload) =>
+  client.post(`/api/training-sessions/${sessionId}/vorm-target`, payload).then((res) => res.data);
+
+export const recalculateComposition = (sessionId, payload) =>
+  client.post(`/api/training-sessions/${sessionId}/recalculate`, payload).then((res) => res.data);
+
+export const dryRunTopup = (payload) =>
+  client.post("/api/training-sessions/dry-run-topup", payload).then((res) => res.data);
+
+export const finalizeSession = (sessionId, payload) =>
+  client.post(`/api/training-sessions/${sessionId}/finalize`, payload).then((res) => res.data);
+
+export const getRecentSessions = (limit) =>
+  client.get("/api/training-sessions/recent", { params: limit ? { limit } : {} }).then((res) => res.data);
+
+export const getSessionDetail = (sessionId) =>
+  client.get(`/api/training-sessions/${sessionId}`).then((res) => res.data);
+
 export default client;

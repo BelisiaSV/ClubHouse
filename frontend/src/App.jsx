@@ -5,6 +5,7 @@ import Compensation from "./pages/Compensation.jsx";
 import ForgotPassword from "./pages/ForgotPassword.jsx";
 import Login from "./pages/Login.jsx";
 import Matches from "./pages/Matches.jsx";
+import NextTraining from "./pages/NextTraining.jsx";
 import Players from "./pages/Players.jsx";
 import Register from "./pages/Register.jsx";
 import ResetPassword from "./pages/ResetPassword.jsx";
@@ -23,6 +24,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Compensation />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/next-training"
+          element={
+            <ProtectedRoute>
+              <NextTraining />
             </ProtectedRoute>
           }
         />

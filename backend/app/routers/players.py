@@ -1,6 +1,5 @@
 import io
 import uuid
-from datetime import date, timedelta
 
 import openpyxl
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
@@ -12,8 +11,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import get_current_user, require_module
 from app.models import Player, PlayerWeeklyDistanceLog, User
-from app.models import RpeWellnessData as DbRpeWellnessData
 from app.models import TrainingCycle as DbTrainingCycle
+from app.routers._readiness import _normalized_wellness, load_squad_readiness
 from app.schemas import (
     PlayerCreate,
     PlayerImportError,
@@ -24,7 +23,6 @@ from app.schemas import (
     WeeklyDistanceOut,
 )
 from app.services.platform_admin import ModuleKey
-from app.services.team_readiness import PlayerReadiness, flag_players
 
 router = APIRouter(
     prefix="/api/players", tags=["players"], dependencies=[Depends(require_module(ModuleKey.SQUAD_OVERVIEW))]
@@ -137,27 +135,6 @@ def list_players(current_user: User = Depends(get_current_user), db: Session = D
     ).all()
 
 
-def _normalized_wellness(entry: DbRpeWellnessData) -> float | None:
-    """Mirrors app.services.team_readiness._wellness_composite's "higher is
-    better" normalization (fatigue/soreness/stress are inverted via 6-x, a
-    private helper of that module so duplicated here rather than imported)
-    — kept consistent with it so the displayed number matches the status
-    that flag_players() actually assigned. Null-safe since these wellness
-    sub-scores are all optional columns."""
-    parts = []
-    if entry.sleep_quality is not None:
-        parts.append(entry.sleep_quality)
-    if entry.fatigue_level is not None:
-        parts.append(6 - entry.fatigue_level)
-    if entry.muscle_soreness is not None:
-        parts.append(6 - entry.muscle_soreness)
-    if entry.stress_level is not None:
-        parts.append(6 - entry.stress_level)
-    if entry.mood is not None:
-        parts.append(entry.mood)
-    return round(sum(parts) / len(parts), 1) if parts else None
-
-
 @router.get("/squad-overview", response_model=list[SquadOverviewPlayerSchema])
 def squad_overview(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Per-player readiness status for the Squad Overview grid: classifies
@@ -170,55 +147,12 @@ def squad_overview(current_user: User = Depends(get_current_user), db: Session =
     flag_players() is keyed by player_name (not id) — an existing
     limitation of that service (two same-named players in one club would
     collide), not something introduced here."""
-    players = db.scalars(
-        select(Player).where(Player.club_id == current_user.club_id).order_by(Player.jersey_number.nulls_last())
-    ).all()
-    if not players:
-        return []
-
-    today = date.today()
-    cutoff_28d = today - timedelta(days=28)
-    cutoff_7d = today - timedelta(days=7)
-    entries = db.scalars(
-        select(DbRpeWellnessData)
-        .where(DbRpeWellnessData.club_id == current_user.club_id, DbRpeWellnessData.entry_date >= cutoff_28d)
-        .order_by(DbRpeWellnessData.player_id, DbRpeWellnessData.entry_date.desc())
-    ).all()
-
-    entries_by_player: dict[uuid.UUID, list[DbRpeWellnessData]] = {}
-    for entry in entries:
-        entries_by_player.setdefault(entry.player_id, []).append(entry)
-
-    # PlayerReadiness wants plain ints for the wellness sub-scores; default
-    # missing ones to 3 (the neutral midpoint of the 1-5 scale) rather than
-    # skewing the composite toward "everything's fine".
-    readiness_by_name: dict[str, PlayerReadiness] = {}
-    for player in players:
-        player_entries = entries_by_player.get(player.id, [])
-        if not player_entries:
-            continue
-        latest = player_entries[0]  # already ordered newest-first
-        name = f"{player.first_name} {player.last_name}"
-        readiness_by_name[name] = PlayerReadiness(
-            player_name=name,
-            acute_load_7d=sum(e.session_load or 0 for e in player_entries if e.entry_date >= cutoff_7d),
-            chronic_load_28d=sum(e.session_load or 0 for e in player_entries) / 4,
-            sleep_quality=latest.sleep_quality or 3,
-            fatigue_level=latest.fatigue_level or 3,
-            muscle_soreness=latest.muscle_soreness or 3,
-            stress_level=latest.stress_level or 3,
-            mood=latest.mood or 3,
-            injury_flag=latest.injury_flag,
-        )
-
-    flags_by_name: dict[str, list] = {}
-    for flag in flag_players(list(readiness_by_name.values())):
-        flags_by_name.setdefault(flag.player_name, []).append(flag)
+    squad = load_squad_readiness(current_user.club_id, db)
 
     result = []
-    for player in players:
-        player_entries = entries_by_player.get(player.id, [])
-        if not player_entries:
+    for sr in squad:
+        player = sr.player
+        if sr.readiness is None or sr.latest is None:
             result.append(
                 SquadOverviewPlayerSchema(
                     id=player.id,
@@ -235,14 +169,12 @@ def squad_overview(current_user: User = Depends(get_current_user), db: Session =
             )
             continue
 
-        name = f"{player.first_name} {player.last_name}"
-        latest = player_entries[0]
-        readiness = readiness_by_name[name]
-        player_flags = flags_by_name.get(name, [])
-        flag_types = {f.flag_type for f in player_flags}
+        readiness = sr.readiness
+        latest = sr.latest
+        flag_types = {f.flag_type for f in sr.flags}
         if "injured" in flag_types or "overload" in flag_types:
             status = "overbelast"
-        elif "poor_recovery" in flag_types or "underload" in flag_types:
+        elif "poor_recovery" in flag_types or "underload" in flag_types or "acwr_trending_up" in flag_types:
             status = "reductie"
         else:
             status = "fit"
@@ -262,7 +194,8 @@ def squad_overview(current_user: User = Depends(get_current_user), db: Session =
                 ),
                 latest_rpe=latest.rpe_score,
                 latest_wellness=_normalized_wellness(latest),
-                flags=[f.detail for f in player_flags],
+                flags=[f.detail for f in sr.flags],
+                flag_types=[f.flag_type for f in sr.flags],
             )
         )
     return result

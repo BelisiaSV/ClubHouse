@@ -146,6 +146,11 @@ class SquadOverviewPlayerSchema(BaseModel):
     latest_rpe: int | None
     latest_wellness: float | None
     flags: list[str]
+    # Raw flag_type values behind `flags`' human-readable detail strings —
+    # lets the frontend filter for the exact "needs attention" set (Next
+    # Training's overload/poor_recovery/acwr_trending_up/injured tile, which
+    # deliberately excludes underload) without re-deriving it from text.
+    flag_types: list[str] = []
 
 
 class PlayerImportError(BaseModel):

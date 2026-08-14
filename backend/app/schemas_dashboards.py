@@ -54,7 +54,7 @@ class TrainingCycleSchema(BaseModel):
     length_weeks: int
     start_date: date
     target_match_date: date
-    target_peak_weekly_km: float = 25.0
+    target_peak_weekly_km: float = 23.0
     weeks: list[CycleWeekSchema] = Field(default_factory=list)
     shift_count: int = 0
 
@@ -76,7 +76,7 @@ class BuildCycleRequest(BaseModel):
     length_weeks: Literal[4, 6, 8]
     start_date: date
     target_match_date: date
-    target_peak_weekly_km: float = 25.0
+    target_peak_weekly_km: float = 23.0
 
 
 class RescheduleCycleRequest(BaseModel):
@@ -89,7 +89,7 @@ class RescheduleCycleRequest(BaseModel):
 class QueueNextCycleRequest(BaseModel):
     length_weeks: Literal[4, 6, 8]
     target_match_date: date
-    target_peak_weekly_km: float = 25.0
+    target_peak_weekly_km: float = 23.0
     name: Optional[str] = None
 
 
@@ -154,7 +154,7 @@ class StartSeasonResponse(BaseModel):
 class NextCycleRequest(BaseModel):
     length_weeks: Literal[4, 6, 8]
     target_match_date: date
-    target_peak_weekly_km: float = 25.0
+    target_peak_weekly_km: float = 23.0
     name: Optional[str] = None
     # Present only so the endpoint can explicitly reject it with a 400
     # instead of silently ignoring it — queue_next_cycle() always derives

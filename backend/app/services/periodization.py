@@ -46,7 +46,7 @@ class TrainingCycle:
     length_weeks: int              # 4, 6 of 8
     start_date: date
     target_match_date: date
-    target_peak_weekly_km: float = 25.0   # door coach bepaald piekvolume (100%-week)
+    target_peak_weekly_km: float = 23.0   # door coach bepaald piekvolume (100%-week)
     weeks: list = field(default_factory=list)   # list[CycleWeek]
     shift_count: int = 0
 
@@ -55,10 +55,20 @@ class TrainingCycle:
 
 
 LOAD_PCT_BY_FOCUS = {
-    WeekFocus.ACCUMULATION: 75.0,
-    WeekFocus.INTENSIFICATION: 90.0,
-    WeekFocus.REALIZATION: 100.0,
-    WeekFocus.DELOAD: 55.0,
+    # VOLUME-curve (km/trainingsduur) — bewust OMGEKEERD aan de intensiteitscurve
+    # in de sessieprofielen (die correct oploopt naar de realisatieweek).
+    #
+    # Klassiek periodiseringsmodel (Matveyev/Bompa): volume bouwt op in de
+    # voorbereidende/accumulatiefase, waarna intensiteit stijgt richting de
+    # wedstrijdspecifieke fase terwijl het volume geleidelijk afneemt
+    # ("tapering"). Cruciaal injuriepreventie-argument: zouden volume én
+    # intensiteit allebei in dezelfde week pieken, dan stapelt dat twee
+    # afzonderlijke risicofactoren in exact dezelfde week — dat vermijdt
+    # deze curve bewust.
+    WeekFocus.ACCUMULATION: 100.0,      # piekvolume, lagere intensiteit
+    WeekFocus.INTENSIFICATION: 90.0,    # licht dalend volume, stijgende intensiteit
+    WeekFocus.REALIZATION: 75.0,        # verder getaperd volume, piekintensiteit/wedstrijdspecificiteit
+    WeekFocus.DELOAD: 50.0,             # scherpe taper, voor supercompensatie
     WeekFocus.RECOVERY: 40.0,
 }
 
@@ -74,7 +84,7 @@ CYCLE_TEMPLATES = {
 
 
 def build_cycle(name: str, length_weeks: int, start_date: date,
-                 target_match_date: date, target_peak_weekly_km: float = 25.0) -> TrainingCycle:
+                 target_match_date: date, target_peak_weekly_km: float = 23.0) -> TrainingCycle:
     template = CYCLE_TEMPLATES[length_weeks]
     cycle = TrainingCycle(
         name=name, length_weeks=length_weeks, start_date=start_date,
@@ -105,7 +115,7 @@ def add_cycle_to_season(
     season: Season,
     length_weeks: int,
     target_match_date: date,
-    target_peak_weekly_km: float = 25.0,
+    target_peak_weekly_km: float = 23.0,
     name: Optional[str] = None,
     start_date: Optional[date] = None,
 ) -> TrainingCycle:
@@ -153,7 +163,7 @@ def queue_next_cycle(
     length_weeks: int,
     target_match_date: date,
     today: date,
-    target_peak_weekly_km: float = 25.0,
+    target_peak_weekly_km: float = 23.0,
     name: Optional[str] = None,
 ) -> TrainingCycle:
     """

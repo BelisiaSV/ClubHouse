@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
@@ -72,8 +72,15 @@ def _load_cycle_from_db(db_cycle: DbTrainingCycle, club: Club, db: Session) -> S
     # per-week query with a date-range WHERE clause — simpler than juggling
     # match_date's timestamptz vs. the weeks' plain dates, and cheap at the
     # data volumes a single club ever has.
+    #
+    # Explicitly normalized to UTC before taking .date(): a tz-aware
+    # datetime's .date() reads off whatever tzinfo is attached to it, which
+    # for a value coming back through psycopg2/SQLAlchemy follows the DB
+    # connection's session TimeZone setting — that can differ between a
+    # local Postgres (usually UTC) and Supabase's pooled connection, silently
+    # shifting a match into the wrong calendar day/week without this.
     match_dates = [
-        d.date()
+        d.astimezone(timezone.utc).date()
         for d in db.scalars(
             select(DbMatch.match_date).where(
                 DbMatch.club_id == club.id,

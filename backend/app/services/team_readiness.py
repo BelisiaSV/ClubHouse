@@ -8,9 +8,11 @@ Zuiver en side-effect-vrij: geen databasetoegang.
 """
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Optional
 
-from app.services.periodization import CycleWeek, WeekFocus
+from app.services.periodization import CycleWeek, Season, WeekFocus, get_active_cycle_and_week
+from app.services.volume_planning import generate_cycle_km_plan
 
 
 @dataclass
@@ -151,6 +153,7 @@ class TrainingProposal:
     adjusted_distance_km: float
     team_readiness_factor: float
     adjustment_note: str
+    session_index: int = 1          # which training in the week (1, 2, ...)
     player_flags: list = field(default_factory=list)
 
 
@@ -192,3 +195,70 @@ def propose_next_training(week: CycleWeek, players: list, km_per_training: float
         team_readiness_factor=team_factor, adjustment_note=note,
         player_flags=flag_players(players),
     )
+
+
+def propose_training_week(season: Season, players: list, today: date) -> list:
+    """
+    Genereert een voorstel voor ALLE trainingen van de actieve week, niet
+    enkel de eerstvolgende — zodat de coach op maandag al zijn hele week kan
+    uitstippelen. Zoekt zelf de actieve cyclus/week op (get_active_cycle_and_week)
+    op basis van 'today', en verdeelt het weekvolume over het aantal geplande
+    trainingen (week.num_trainings), met een lichtjes oplopende intensiteit
+    doorheen de week — een vereenvoudigde, maar gangbare microcyclus-opbouw
+    naar de zwaarste sessie toe. Coaches kunnen dit als leidraad gebruiken en
+    zelf bijsturen per sessie (zie propose_session_composition() voor de
+    concrete oefenvormen van een gekozen sessie)."""
+    cycle, week = get_active_cycle_and_week(season, today)
+    if week is None:
+        raise ValueError(f"Geen actieve cyclusweek gevonden voor {today}.")
+
+    km_plans = generate_cycle_km_plan(cycle)
+    km_plan_for_week = next(p for p in km_plans if p.week_number == week.week_number)
+
+    profile = TEAM_SESSION_PROFILES[week.focus]
+    num_sessions = max(1, week.num_trainings)
+
+    fit_players = [p for p in players if not p.injury_flag]
+    if fit_players:
+        factors = [_load_adjustment_factor(_acwr(p), _wellness_composite(p),
+                                            _acwr_trending_up(p.weekly_acute_load_history))
+                   for p in fit_players]
+        team_factor = round(sum(factors) / len(factors), 2)
+    else:
+        team_factor = 1.0
+
+    if team_factor <= 0.80:
+        note = (f"Teambelasting/herstel duidelijk onder norm (factor {team_factor}). "
+                f"Volume deze week verlaagd — accent op techniek i.p.v. volume.")
+    elif team_factor <= 0.90:
+        note = f"Lichte team-vermoeidheid (factor {team_factor}): duur/km licht verlaagd."
+    else:
+        note = "Team-readiness normaal — sessies volgens planning."
+
+    flags = flag_players(players)
+
+    proposals = []
+    for i in range(num_sessions):
+        if num_sessions == 1:
+            intensity_low = intensity_high = profile["intensity_low"]
+        else:
+            span = profile["intensity_high"] - profile["intensity_low"]
+            frac = i / (num_sessions - 1)
+            # laatste sessie van de week raakt het hoogste punt van de band;
+            # eerdere sessies blijven er bewust net onder
+            intensity_low = round(profile["intensity_low"] + frac * span * 0.85, 2)
+            intensity_high = round(min(intensity_low + span * 0.15, profile["intensity_high"]), 2)
+
+        adjusted_duration = round(profile["base_duration_min"] * team_factor)
+        adjusted_distance = round(km_plan_for_week.km_per_training * team_factor, 2)
+
+        proposals.append(TrainingProposal(
+            week_focus=week.focus, suggested_session_type=profile["session_type"],
+            intensity_pct_mas_low=intensity_low, intensity_pct_mas_high=intensity_high,
+            base_duration_min=profile["base_duration_min"], adjusted_duration_min=adjusted_duration,
+            base_distance_km=km_plan_for_week.km_per_training, adjusted_distance_km=adjusted_distance,
+            team_readiness_factor=team_factor, adjustment_note=note,
+            session_index=i + 1,
+            player_flags=flags if i == 0 else [],  # aandachtspunten enkel bij sessie 1 tonen, niet herhalen
+        ))
+    return proposals

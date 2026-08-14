@@ -5,8 +5,11 @@ import {
   getCalendarEvents,
   getCurrentCycles,
   getKmOverview,
+  getMasTestProtocols,
   listMatches,
   listPlayers,
+  recordMasTestBatch,
+  syncMasTestCalendar,
 } from "../api/client";
 
 const FOCUS_META = {
@@ -84,7 +87,14 @@ export default function Matches() {
   const [error, setError] = useState(null);
 
   const [masTestEvents, setMasTestEvents] = useState([]);
+  const [players, setPlayers] = useState([]);
   const [playersById, setPlayersById] = useState({});
+  const [protocols, setProtocols] = useState([]);
+
+  // Two-step MAS-test batch flow, opened from an "Aankomende MAS-testen"
+  // entry below: step 'protocol' shows the protocol cards (stap A), step
+  // 'batch' shows the whole-squad result entry (stap B). null = closed.
+  const [masModal, setMasModal] = useState(null);
 
   const [cycles, setCycles] = useState({ active: null, queued: null });
   const [kmOverview, setKmOverview] = useState([]);
@@ -112,16 +122,74 @@ export default function Matches() {
 
   useEffect(() => {
     refresh();
-    getCalendarEvents("mas_test")
+    // Re-projects the season's MAS-test calendar on every visit (not just
+    // after a recorded result) — otherwise a club that never happened to
+    // trigger POST /record first would see this list stay empty forever.
+    syncMasTestCalendar()
       .then(setMasTestEvents)
       .catch(() => {});
     listPlayers()
-      .then((players) => setPlayersById(Object.fromEntries(players.map((p) => [p.id, p]))))
+      .then((data) => {
+        setPlayers(data);
+        setPlayersById(Object.fromEntries(data.map((p) => [p.id, p])));
+      })
       .catch(() => {});
     getCurrentCycles()
       .then(setCycles)
       .catch(() => {});
+    getMasTestProtocols()
+      .then(setProtocols)
+      .catch(() => {});
   }, []);
+
+  const refreshMasTestEvents = () => getCalendarEvents("mas_test").then(setMasTestEvents).catch(() => {});
+
+  const openMasModal = (event) => {
+    setMasModal({
+      event,
+      step: "protocol",
+      protocolKey: null,
+      testDate: event.event_date,
+      results: {},
+      saving: false,
+      error: null,
+      saveResult: null,
+    });
+  };
+
+  const closeMasModal = () => setMasModal(null);
+
+  const selectProtocol = (protocolKey) => {
+    setMasModal((m) => ({
+      ...m,
+      step: "batch",
+      protocolKey,
+      results: Object.fromEntries(players.map((p) => [p.id, ""])),
+    }));
+  };
+
+  const updateMasResult = (playerId, value) => {
+    setMasModal((m) => ({ ...m, results: { ...m.results, [playerId]: value } }));
+  };
+
+  const saveMasBatch = async () => {
+    setMasModal((m) => ({ ...m, saving: true, error: null }));
+    try {
+      const results = players.map((p) => ({
+        player_id: p.id,
+        raw_result_kmh: masModal.results[p.id] === "" ? null : Number(masModal.results[p.id]),
+      }));
+      const response = await recordMasTestBatch({
+        protocol_key: masModal.protocolKey,
+        test_date: masModal.testDate,
+        results,
+      });
+      setMasModal((m) => ({ ...m, saving: false, saveResult: response }));
+      refreshMasTestEvents();
+    } catch (err) {
+      setMasModal((m) => ({ ...m, saving: false, error: err.response?.data?.detail ?? err.message }));
+    }
+  };
 
   useEffect(() => {
     if (!cycles.active) {
@@ -390,13 +458,18 @@ export default function Matches() {
           <h2 className="text-white font-semibold mb-1">Aankomende MAS-testen</h2>
           <p className="text-sm text-gray-400 mb-3">
             Geprojecteerd tot het einde van het seizoen — wordt automatisch bijgewerkt zodra een
-            coach een testresultaat invoert.
+            coach een testresultaat invoert. Klik op een testmoment om resultaten in te vullen.
           </p>
           <ul className="divide-y divide-white/5">
             {masTestEvents.map((ev) => (
-              <li key={ev.id} className="py-2.5 text-sm text-gray-300 flex justify-between">
-                <span>{new Date(ev.event_date).toLocaleDateString("nl-BE")}</span>
-                <span className="text-gray-400">{ev.player_ids.map(playerLabel).join(", ")}</span>
+              <li key={ev.id}>
+                <button
+                  onClick={() => openMasModal(ev)}
+                  className="w-full py-2.5 text-sm text-gray-300 flex justify-between hover:text-white transition-colors text-left"
+                >
+                  <span>{new Date(ev.event_date).toLocaleDateString("nl-BE")}</span>
+                  <span className="text-gray-400">{ev.player_ids.map(playerLabel).join(", ")}</span>
+                </button>
               </li>
             ))}
           </ul>
@@ -434,8 +507,8 @@ export default function Matches() {
                       <td className="px-4 py-3 whitespace-nowrap">{m.is_home ? "Thuis" : "Uit"}</td>
                       <td className="px-4 py-3 whitespace-nowrap">{m.competition ?? "—"}</td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">
-                        <button onClick={() => navigate("/")} className="text-brand hover:opacity-80 text-xs font-medium">
-                          Naar MAS-paneel →
+                        <button onClick={() => navigate("/wedstrijden")} className="text-brand hover:opacity-80 text-xs font-medium">
+                          Naar Wedstrijden →
                         </button>
                       </td>
                     </tr>
@@ -446,6 +519,138 @@ export default function Matches() {
           )
         )}
       </div>
+
+      {masModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick={closeMasModal}>
+          <div
+            className="bg-gray-900 border border-white/10 rounded-2xl shadow-2xl max-w-3xl w-full max-h-[85vh] overflow-y-auto p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-white font-semibold text-lg">MAS-test</h3>
+                <p className="text-xs text-gray-500">
+                  {new Date(masModal.event.event_date).toLocaleDateString("nl-BE")} ·{" "}
+                  {masModal.step === "protocol" ? "stap 1: protocol kiezen" : "stap 2: resultaten invullen"}
+                </p>
+              </div>
+              <button onClick={closeMasModal} className="text-gray-400 hover:text-white text-sm">
+                Sluiten ✕
+              </button>
+            </div>
+
+            {masModal.step === "protocol" && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {protocols.map((p) => (
+                  <div key={p.key} className="bg-gray-950/60 border border-white/10 rounded-xl p-4 space-y-2">
+                    <p className="text-white font-medium">{p.name}</p>
+                    <p className="text-xs text-gray-400 leading-relaxed">{p.description}</p>
+                    <details className="text-xs text-gray-500">
+                      <summary className="cursor-pointer hover:text-gray-300">Materiaal &amp; afname</summary>
+                      <ul className="list-disc list-inside mt-1.5 space-y-0.5">
+                        {p.equipment.map((eq, i) => (
+                          <li key={i}>{eq}</li>
+                        ))}
+                      </ul>
+                      <p className="mt-1.5">{p.how_to_administer}</p>
+                    </details>
+                    <button
+                      onClick={() => selectProtocol(p.key)}
+                      className="btn-brand text-white px-3 py-2 rounded-lg text-xs font-medium w-full"
+                    >
+                      Selecteer protocol
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {masModal.step === "batch" && (
+              <>
+                {(() => {
+                  const protocol = protocols.find((p) => p.key === masModal.protocolKey);
+                  return (
+                    <>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <p className="text-sm text-white font-medium">{protocol?.name}</p>
+                        <label className="flex items-center gap-2 text-xs text-gray-400">
+                          Testdatum
+                          <input
+                            type="date"
+                            value={masModal.testDate}
+                            onChange={(e) => setMasModal((m) => ({ ...m, testDate: e.target.value }))}
+                            className="bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 ring-brand"
+                          />
+                        </label>
+                        <button
+                          onClick={() => setMasModal((m) => ({ ...m, step: "protocol" }))}
+                          className="text-brand hover:opacity-80 text-xs font-medium"
+                        >
+                          ← ander protocol
+                        </button>
+                      </div>
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left text-gray-300 min-w-[420px]">
+                          <thead>
+                            <tr className="text-[10px] uppercase tracking-wider text-gray-500 border-b border-white/10">
+                              <th className="px-3 py-2 font-medium">Speler</th>
+                              <th className="px-3 py-2 font-medium">{protocol?.result_label}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {players.map((p) => (
+                              <tr key={p.id} className="border-b border-white/5 last:border-b-0">
+                                <td className="px-3 py-2 text-white">
+                                  {p.jersey_number != null ? `#${p.jersey_number} ` : ""}
+                                  {p.first_name} {p.last_name}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <input
+                                    type="number"
+                                    step="0.1"
+                                    min="0"
+                                    value={masModal.results[p.id] ?? ""}
+                                    onChange={(e) => updateMasResult(p.id, e.target.value)}
+                                    className="bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 ring-brand"
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {masModal.error && <p className="text-red-400 text-sm">{masModal.error}</p>}
+
+                      {masModal.saveResult && (
+                        <div className="text-sm space-y-1">
+                          <p className="text-emerald-400">
+                            {masModal.saveResult.saved_player_ids.length} resultaat/resultaten opgeslagen.
+                          </p>
+                          {masModal.saveResult.skipped_player_ids.length > 0 && (
+                            <p className="text-amber-400 text-xs">
+                              Nog ontbrekend: {masModal.saveResult.skipped_player_ids.map(playerLabel).join(", ")}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      <button
+                        onClick={saveMasBatch}
+                        disabled={masModal.saving}
+                        className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium w-full disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {masModal.saving ? "Bezig…" : "Opslaan voor volledige groep"}
+                      </button>
+                    </>
+                  );
+                })()}
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

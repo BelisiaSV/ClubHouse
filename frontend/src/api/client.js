@@ -127,6 +127,13 @@ export const patchActiveCycle = (payload) =>
 export const getKmOverview = (cycleId) =>
   client.get(`/api/periodization/training-cycles/${cycleId}/km-overview`).then((res) => res.data);
 
+// ---- Periodization: season start / first-cycle correction ----
+export const startSeason = (payload) =>
+  client.post("/api/periodization/seasons", payload).then((res) => res.data);
+
+export const editFirstCycle = (seasonId, payload) =>
+  client.patch(`/api/periodization/seasons/${seasonId}/first-cycle`, payload).then((res) => res.data);
+
 // ---- MAS testing: protocols, recording, calendar ----
 export const getMasTestProtocols = () =>
   client.get("/api/mas-testing/protocols").then((res) => res.data);
@@ -136,6 +143,9 @@ export const recordMasTest = (payload) =>
 
 export const syncMasTestCalendar = () =>
   client.post("/api/mas-testing/sync-calendar").then((res) => res.data);
+
+export const recordMasTestBatch = (payload) =>
+  client.post("/api/mas-testing/record-batch", payload).then((res) => res.data);
 
 export const getCalendarEvents = (eventType) =>
   client
@@ -164,7 +174,12 @@ export const proposeTrainingAuto = (kmPerTraining) =>
     .post("/api/team-readiness/propose-training/auto", { km_per_training: kmPerTraining })
     .then((res) => res.data);
 
+export const proposeWeek = () =>
+  client.post("/api/team-readiness/propose-week").then((res) => res.data);
+
 // ---- Next Training: session composition (oefenvormen) ----
+export const getVormenLibrary = () => client.get("/api/training-sessions/vormen").then((res) => res.data);
+
 export const getCompositionProposal = (sessionId, payload) =>
   client.post(`/api/training-sessions/${sessionId}/composition-proposal`, payload).then((res) => res.data);
 

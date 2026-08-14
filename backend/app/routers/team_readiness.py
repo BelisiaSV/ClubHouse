@@ -26,7 +26,7 @@ from app.schemas_dashboards import (
 from app.services.periodization import get_active_cycle_and_week
 from app.services.platform_admin import ModuleKey
 from app.services.rpe_wellness import is_session_day
-from app.services.team_readiness import flag_players, propose_next_training
+from app.services.team_readiness import flag_players, propose_next_training, propose_training_week
 
 router = APIRouter(
     prefix="/api/team-readiness",
@@ -148,6 +148,42 @@ def propose_training_auto(
     db.refresh(db_session)
 
     return TrainingProposalSchema.model_validate(proposal).model_copy(update={"session_id": db_session.id})
+
+
+@router.post("/propose-week", response_model=list[TrainingProposalSchema])
+def propose_week(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """De volledig automatische Next Training-ketting: de coach hoeft enkel
+    het aantal aanwezige spelers per gekozen sessie op te geven (later, aan
+    propose_session_composition() — zie app/routers/training_sessions.py),
+    niets hier. Genereert ÉÉN voorstel per training van de actieve week
+    (propose_training_week, op basis van de echte teamreadiness via
+    load_squad_readiness) en persisteert elk meteen als een eigen
+    TrainingSession-rij, zodat de coach voor elke sessie afzonderlijk verder
+    kan met de oefenvormen."""
+    today = date.today()
+    season, _ = load_season_from_db(current_user.club_id, db)
+    squad = load_squad_readiness(current_user.club_id, db)
+    players = [sr.readiness for sr in squad if sr.readiness is not None]
+
+    try:
+        proposals = propose_training_week(season, players, today)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    schemas = []
+    for proposal in proposals:
+        db_session = DbTrainingSession(
+            club_id=current_user.club_id,
+            week_focus=DbWeekFocus(proposal.week_focus.value),
+            target_duration_min=proposal.adjusted_duration_min,
+            target_distance_km=proposal.adjusted_distance_km,
+        )
+        db.add(db_session)
+        db.flush()
+        schemas.append(TrainingProposalSchema.model_validate(proposal).model_copy(update={"session_id": db_session.id}))
+    db.commit()
+
+    return schemas
 
 
 @router.post("/propose-training", response_model=TrainingProposalSchema)

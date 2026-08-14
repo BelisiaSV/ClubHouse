@@ -17,6 +17,7 @@ from app.schemas_matches import (
     MatchPlayerRow,
     MatchPlayerUpdate,
 )
+from app.routers.periodization import realign_season_to_matches
 from app.services.platform_admin import ModuleKey
 from app.services.volume_planning import PlayerPosition as ServicePlayerPosition
 from app.services.volume_planning import populate_match_distance_for_week
@@ -119,6 +120,12 @@ def create_match(
     db.add(match)
     db.commit()
     db.refresh(match)
+
+    # Auto-aligns the realization week of every cycle to the nearest real
+    # match instead of the coach entering a target match date by hand — see
+    # app/routers/periodization.py's realign_season_to_matches docstring.
+    realign_season_to_matches(current_user.club_id, db)
+
     return match
 
 

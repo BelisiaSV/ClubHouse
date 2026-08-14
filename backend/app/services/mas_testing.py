@@ -337,3 +337,32 @@ def record_mas_test(player_name: str, protocol_key: str, raw_result_kmh: float, 
         player_name=player_name, protocol_key=protocol_key, protocol_name=protocol.name,
         test_date=test_date, raw_result_kmh=raw_result_kmh, mas_kmh=mas_kmh,
     )
+
+
+def record_mas_test_batch(results: list, protocol_key: str, test_date: date) -> dict:
+    """
+    Verwerkt de resultaten van de VOLLEDIGE kern in één aanroep — dit is wat
+    de 'Opslaan voor volledige groep'-knop op het batch-invulscherm (stap B,
+    na de protocolkeuze in stap A) aanroept, in plaats van een aparte
+    opslagactie per speler.
+
+    results: [{'player_name': str, 'raw_result_kmh': float}, ...] — één
+    protocol en testdatum geldt voor de hele batch (het hele team neemt op
+    hetzelfde moment dezelfde test af).
+
+    Spelers met een ongeldig resultaat (niet ingevuld, <= 0) worden
+    overgeslagen in plaats van de hele batch te laten falen — de lijst
+    overgeslagen namen komt terug mee zodat de coach ziet wie nog ontbreekt.
+    """
+    if protocol_key not in MAS_TEST_PROTOCOLS:
+        raise ValueError(f"Onbekend testprotocol: {protocol_key}")
+
+    records, skipped = [], []
+    for entry in results:
+        raw = entry.get("raw_result_kmh")
+        if raw is None or raw <= 0:
+            skipped.append(entry.get("player_name", "onbekend"))
+            continue
+        records.append(record_mas_test(entry["player_name"], protocol_key, raw, test_date))
+
+    return {"records": records, "skipped_players": skipped}

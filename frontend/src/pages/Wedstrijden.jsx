@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { generateForMatch, getMatchPlayers, listMatches, updateMatchPlayer } from "../api/client";
+import { createMatch, generateForMatch, getMatchPlayers, listMatches, updateMatchPlayer } from "../api/client";
 
 const THRESHOLD_MIN = 60;
 const MINUTE_OPTIONS = Array.from({ length: 91 }, (_, i) => i);
@@ -16,11 +15,18 @@ function fmtMatchLabel(m) {
   return `${d.toLocaleDateString("nl-BE", { day: "numeric", month: "short" })} · vs ${m.opponent}`;
 }
 
-export default function Compensation() {
+export default function Wedstrijden() {
   const [matches, setMatches] = useState([]);
   const [matchesLoading, setMatchesLoading] = useState(true);
   const [matchesError, setMatchesError] = useState(null);
   const [selectedMatchId, setSelectedMatchId] = useState("");
+
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [opponent, setOpponent] = useState("");
+  const [matchDate, setMatchDate] = useState("");
+  const [isHome, setIsHome] = useState(true);
+  const [addSubmitting, setAddSubmitting] = useState(false);
+  const [addError, setAddError] = useState(null);
 
   const [rows, setRows] = useState([]);
   const [rowsLoading, setRowsLoading] = useState(false);
@@ -32,14 +38,23 @@ export default function Compensation() {
   const [generateError, setGenerateError] = useState(null);
   const [result, setResult] = useState(null);
 
-  useEffect(() => {
-    listMatches()
+  const refreshMatches = (keepSelection = true) => {
+    setMatchesLoading(true);
+    return listMatches()
       .then((data) => {
         setMatches(data);
-        if (data.length > 0) setSelectedMatchId(data[0].id);
+        if (!keepSelection || !data.some((m) => m.id === selectedMatchId)) {
+          if (data.length > 0) setSelectedMatchId(data[0].id);
+        }
+        setMatchesError(null);
       })
       .catch((err) => setMatchesError(err.response?.data?.detail ?? err.message))
       .finally(() => setMatchesLoading(false));
+  };
+
+  useEffect(() => {
+    refreshMatches(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadRows = (matchId) => {
@@ -61,6 +76,29 @@ export default function Compensation() {
     loadRows(selectedMatchId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMatchId]);
+
+  const handleAddMatch = async (e) => {
+    e.preventDefault();
+    setAddSubmitting(true);
+    setAddError(null);
+    try {
+      const created = await createMatch({
+        opponent,
+        match_date: new Date(matchDate).toISOString(),
+        is_home: isHome,
+      });
+      setOpponent("");
+      setMatchDate("");
+      setIsHome(true);
+      setShowAddForm(false);
+      await refreshMatches(false);
+      setSelectedMatchId(created.id);
+    } catch (err) {
+      setAddError(err.response?.data?.detail ?? err.message);
+    } finally {
+      setAddSubmitting(false);
+    }
+  };
 
   const savePlayerRow = async (playerId, payload) => {
     setRowSaveState((st) => ({ ...st, [playerId]: { state: "saving", pending: payload } }));
@@ -87,9 +125,7 @@ export default function Compensation() {
   const handleMinutesChange = (row, newMinutes) => {
     const minutes = newMinutes === "" ? null : Number(newMinutes);
     setRows((rs) =>
-      rs.map((r) =>
-        r.player_id === row.player_id ? { ...r, minutes_played: minutes ?? r.minutes_played } : r
-      )
+      rs.map((r) => (r.player_id === row.player_id ? { ...r, minutes_played: minutes ?? r.minutes_played } : r))
     );
     savePlayerRow(row.player_id, { selection_status: row.selection_status, minutes_played: minutes });
   };
@@ -128,22 +164,64 @@ export default function Compensation() {
 
   return (
     <div className="max-w-4xl mx-auto py-12 px-4 space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-white tracking-tight mb-1.5">MAS &amp; Compensatiepaneel</h1>
-        <p className="text-sm text-gray-400 max-w-2xl leading-relaxed">
-          Kies een wedstrijd en stel per speler zijn status of exacte speelminuten in. Spelers onder de
-          drempel krijgen een MAS-gebaseerd inhaalprogramma.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold text-white tracking-tight mb-1.5">Wedstrijden</h1>
+          <p className="text-sm text-gray-400 max-w-2xl leading-relaxed">
+            Wedstrijd toevoegen, per speler status of speelminuten ingeven, en meteen inhaalschema's
+            genereren voor wie onder de drempel blijft — allemaal per wedstrijd op één plek.
+          </p>
+        </div>
+        <button
+          onClick={() => setShowAddForm((v) => !v)}
+          className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium shrink-0"
+        >
+          {showAddForm ? "Annuleren" : "+ Wedstrijd toevoegen"}
+        </button>
       </div>
+
+      {showAddForm && (
+        <form onSubmit={handleAddMatch} className="bg-gray-900/60 border border-white/10 rounded-2xl p-6 space-y-4 shadow-xl shadow-black/20">
+          <div className="grid grid-cols-2 gap-3">
+            <input
+              required
+              placeholder="Tegenstander"
+              value={opponent}
+              onChange={(e) => setOpponent(e.target.value)}
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm col-span-2 focus:outline-none focus:ring-2 ring-brand"
+            />
+            <input
+              type="datetime-local"
+              required
+              value={matchDate}
+              onChange={(e) => setMatchDate(e.target.value)}
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ring-brand"
+            />
+            <select
+              value={isHome ? "thuis" : "uit"}
+              onChange={(e) => setIsHome(e.target.value === "thuis")}
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ring-brand"
+            >
+              <option value="thuis">Thuis</option>
+              <option value="uit">Uit</option>
+            </select>
+          </div>
+          {addError && <p className="text-red-400 text-sm">{addError}</p>}
+          <button
+            type="submit"
+            disabled={addSubmitting}
+            className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {addSubmitting ? "Bezig…" : "Toevoegen"}
+          </button>
+        </form>
+      )}
 
       {matchesError && <p className="text-red-400 text-sm">{matchesError}</p>}
 
       {matches.length === 0 && !matchesError && (
         <div className="bg-gray-900/60 border border-white/10 rounded-2xl p-10 text-center space-y-4 shadow-xl shadow-black/20">
           <p className="text-gray-400 text-sm">Nog geen wedstrijden ingegeven.</p>
-          <Link to="/matches" className="inline-block btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium">
-            Ga naar de kalender →
-          </Link>
         </div>
       )}
 
@@ -236,9 +314,7 @@ export default function Compensation() {
                           )}
                         </td>
                         <td className="px-4 py-3 w-16">
-                          {save?.state === "saving" && (
-                            <span className="text-xs text-gray-500">Bezig…</span>
-                          )}
+                          {save?.state === "saving" && <span className="text-xs text-gray-500">Bezig…</span>}
                           {save?.state === "saved" && (
                             <span className="text-emerald-400 text-sm" title="Opgeslagen">
                               ✓
@@ -249,10 +325,7 @@ export default function Compensation() {
                               <span className="text-red-400 text-xs" title={save.message}>
                                 ✕ fout
                               </span>
-                              <button
-                                onClick={() => retryRow(r)}
-                                className="text-emerald-400 text-xs underline"
-                              >
+                              <button onClick={() => retryRow(r)} className="text-emerald-400 text-xs underline">
                                 Opnieuw
                               </button>
                             </div>

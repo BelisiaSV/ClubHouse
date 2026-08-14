@@ -10,8 +10,8 @@ import {
 } from "./icons.jsx";
 
 const NAV_ITEMS = [
-  { to: "/next-training", label: "Next Training", Icon: NextTrainingIcon },
-  { to: "/", end: true, label: "MAS & Compensatie", Icon: CompensationIcon },
+  { to: "/", end: true, label: "Dashboard", Icon: NextTrainingIcon },
+  { to: "/wedstrijden", label: "Wedstrijden", Icon: CompensationIcon },
   { to: "/players", label: "Squad", Icon: SquadIcon },
   { to: "/matches", label: "Kalender", Icon: CalendarIcon },
 ];

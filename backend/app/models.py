@@ -377,7 +377,10 @@ class TrainingCycle(Base):
     length_type: Mapped[CycleLength] = mapped_column(cycle_length_enum, nullable=False)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
-    target_match_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # Nullable: at cycle-creation time the exact target match is often not
+    # yet known — align_cycle_to_nearest_match() sets it automatically once
+    # real Match rows exist, instead of the coach entering it by hand.
+    target_match_date: Mapped[date | None] = mapped_column(Date)
     target_match_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("matches.id"))
     # Was accepted in BuildCycleRequest/QueueNextCycleRequest but never had a
     # column to land in — every cycle silently fell back to the service

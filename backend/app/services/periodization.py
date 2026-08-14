@@ -45,7 +45,11 @@ class TrainingCycle:
     name: str
     length_weeks: int              # 4, 6 of 8
     start_date: date
-    target_match_date: date
+    # Optioneel: bij het kiezen van een cyclus is de exacte doelwedstrijd vaak
+    # nog niet gekend — target_match_date wordt daarna automatisch bepaald door
+    # align_cycle_to_nearest_match() zodra er effectief wedstrijden in de
+    # kalender staan, in plaats van dat de coach dit handmatig moet invullen.
+    target_match_date: Optional[date] = None
     target_peak_weekly_km: float = 23.0   # door coach bepaald piekvolume (100%-week)
     weeks: list = field(default_factory=list)   # list[CycleWeek]
     shift_count: int = 0
@@ -84,7 +88,7 @@ CYCLE_TEMPLATES = {
 
 
 def build_cycle(name: str, length_weeks: int, start_date: date,
-                 target_match_date: date, target_peak_weekly_km: float = 23.0) -> TrainingCycle:
+                 target_match_date: Optional[date] = None, target_peak_weekly_km: float = 23.0) -> TrainingCycle:
     template = CYCLE_TEMPLATES[length_weeks]
     cycle = TrainingCycle(
         name=name, length_weeks=length_weeks, start_date=start_date,
@@ -114,7 +118,7 @@ class Season:
 def add_cycle_to_season(
     season: Season,
     length_weeks: int,
-    target_match_date: date,
+    target_match_date: Optional[date] = None,
     target_peak_weekly_km: float = 23.0,
     name: Optional[str] = None,
     start_date: Optional[date] = None,
@@ -161,8 +165,8 @@ def get_active_cycle_and_week(season: Season, today: date):
 def queue_next_cycle(
     season: Season,
     length_weeks: int,
-    target_match_date: date,
     today: date,
+    target_match_date: Optional[date] = None,
     target_peak_weekly_km: float = 23.0,
     name: Optional[str] = None,
 ) -> TrainingCycle:
@@ -220,9 +224,16 @@ def start_new_season(
     name: str,
     start_date: date,
     length_weeks: int,
-    target_match_date: date,
+    target_match_date: Optional[date] = None,
     target_peak_weekly_km: float = 23.0,
 ) -> Season:
+    """Start een nieuw seizoen: de trainer geeft ÉÉN keer een startdatum in,
+    voor de allereerste cyclus — geen doelwedstrijddatum, die hoort hier niet
+    thuis (vaak nog niet gekend). Elke volgende cyclus wordt nadien gekozen
+    via queue_next_cycle(), waar ook geen datum-invoer meer nodig is; de
+    doelwedstrijddatum wordt pas later, automatisch, bepaald via
+    align_cycle_to_nearest_match() zodra er effectief wedstrijden in de
+    kalender staan."""
     if length_weeks not in CYCLE_TEMPLATES:
         raise ValueError(f"Ongeldige cycluslengte: {length_weeks} (kies 4, 6 of 8).")
     season = Season(name=name)
@@ -231,6 +242,61 @@ def start_new_season(
         target_peak_weekly_km=target_peak_weekly_km, name=f"{name} — Cyclus 1", start_date=start_date,
     )
     return season
+
+
+def edit_first_cycle_of_season(
+    season: Season,
+    new_start_date: Optional[date] = None,
+    new_length_weeks: Optional[int] = None,
+    new_target_peak_weekly_km: Optional[float] = None,
+) -> TrainingCycle:
+    """Corrigeert de EERSTE cyclus van een seizoen (startdatum en/of lengte)
+    — voor wanneer de coach zich vergist heeft. Enkel toegestaan zolang er
+    nog geen volgende cyclus is gestart (season.cycles telt precies 1): zodra
+    een tweede cyclus is aangesloten, zou een wijziging aan de eerste cyclus
+    alle latere startdata laten verschuiven en eventueel al gelogde
+    trainingsdata (MAS-testen, RPE, km per week) laten ontsporen — dit blijft
+    bewust beperkt tot de veilige, vroege situatie."""
+    if len(season.cycles) != 1:
+        raise ValueError(
+            "De eerste cyclus kan enkel nog gecorrigeerd worden zolang er geen "
+            "volgende cyclus is gestart — er staat al meer dan 1 cyclus in dit seizoen."
+        )
+    old = season.cycles[0]
+    length_weeks = new_length_weeks or old.length_weeks
+    if length_weeks not in CYCLE_TEMPLATES:
+        raise ValueError(f"Ongeldige cycluslengte: {length_weeks} (kies 4, 6 of 8).")
+
+    corrected = build_cycle(
+        name=old.name, length_weeks=length_weeks,
+        start_date=new_start_date or old.start_date,
+        target_match_date=old.target_match_date,
+        target_peak_weekly_km=new_target_peak_weekly_km or old.target_peak_weekly_km,
+    )
+    season.cycles[0] = corrected
+    return corrected
+
+
+def align_cycle_to_nearest_match(cycle: TrainingCycle, match_dates: list) -> Optional[date]:
+    """Lijnt de realisatieweek van een cyclus automatisch uit op de
+    dichtstbijzijnde ECHTE wedstrijd uit de kalender, in plaats van dat de
+    coach bij het kiezen van een cyclus handmatig een 'doelwedstrijddatum'
+    moet invullen. Wordt aangeroepen telkens een wedstrijd wordt toegevoegd/
+    gewijzigd in de kalender (zie app/routers/matches.py) — geen eenmalige,
+    statische instelling.
+
+    Geeft de gekozen datum terug, of None als er geen enkele wedstrijd binnen
+    een redelijk venster van de cyclus valt (dan blijft de realisatieweek op
+    de sjabloonpositie staan)."""
+    if not match_dates:
+        return None
+    candidates = [d for d in match_dates if cycle.start_date <= d <= cycle.end_date() + timedelta(days=7)]
+    if not candidates:
+        return None
+    chosen = min(candidates, key=lambda d: abs((d - cycle.end_date()).days))
+    cycle.target_match_date = chosen
+    _align_realization_to_match(cycle)
+    return chosen
 
 
 # =============================================================
@@ -292,6 +358,8 @@ def _find_cutover_week(cycle: TrainingCycle, cancelled_date: date) -> int:
 
 
 def _align_realization_to_match(cycle: TrainingCycle) -> None:
+    if cycle.target_match_date is None:
+        return
     for w in cycle.weeks:
         week_end = w.week_start_date + timedelta(days=6)
         if w.week_start_date <= cycle.target_match_date <= week_end:

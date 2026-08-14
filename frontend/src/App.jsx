@@ -1,7 +1,6 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout.jsx";
 import ProtectedRoute from "./components/ProtectedRoute.jsx";
-import Compensation from "./pages/Compensation.jsx";
 import ForgotPassword from "./pages/ForgotPassword.jsx";
 import Login from "./pages/Login.jsx";
 import Matches from "./pages/Matches.jsx";
@@ -10,6 +9,7 @@ import Players from "./pages/Players.jsx";
 import Register from "./pages/Register.jsx";
 import ResetPassword from "./pages/ResetPassword.jsx";
 import Settings from "./pages/Settings.jsx";
+import Wedstrijden from "./pages/Wedstrijden.jsx";
 
 export default function App() {
   return (
@@ -23,15 +23,16 @@ export default function App() {
           path="/"
           element={
             <ProtectedRoute>
-              <Compensation />
+              <NextTraining />
             </ProtectedRoute>
           }
         />
+        <Route path="/next-training" element={<Navigate to="/" replace />} />
         <Route
-          path="/next-training"
+          path="/wedstrijden"
           element={
             <ProtectedRoute>
-              <NextTraining />
+              <Wedstrijden />
             </ProtectedRoute>
           }
         />

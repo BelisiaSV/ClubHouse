@@ -15,6 +15,8 @@ from app.schemas_dashboards import (
     CalendarEventSchema,
     MASTestProtocolSchema,
     PlanNextMasTestRequest,
+    RecordMasTestBatchRequest,
+    RecordMasTestBatchResponse,
     RecordMasTestRequest,
     RecordMasTestResponse,
     TestPlanningResultSchema,
@@ -26,6 +28,7 @@ from app.services.mas_testing import (
     project_season_mas_test_events,
     recalculate_training_zones,
     record_mas_test,
+    record_mas_test_batch,
 )
 from app.services.platform_admin import ModuleKey
 
@@ -158,6 +161,71 @@ def record_test(
         mas_kmh=record.mas_kmh,
         protocol_name=record.protocol_name,
         test_date=record.test_date,
+        calendar_events_synced=len(synced),
+    )
+
+
+@router.post("/record-batch", response_model=RecordMasTestBatchResponse)
+def record_test_batch(
+    payload: RecordMasTestBatchRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Stap B van de MAS-test-kalenderflow (na protocolkeuze in stap A): de
+    volledige kern in één 'Opslaan voor volledige groep'-actie, in plaats van
+    een aparte opslag per speler. Spelers zonder ingevuld resultaat worden
+    overgeslagen, niet de hele batch laten falen — skipped_player_ids toont
+    wie nog ontbreekt. Elk opgeslagen resultaat gaat naar de mas_tests-tabel
+    zodat het zowel de trainingszones als de toekomstige testplanning voedt,
+    net als POST /record."""
+    players = db.scalars(
+        select(Player).where(Player.club_id == current_user.club_id, Player.is_active.is_(True))
+    ).all()
+    players_by_id = {p.id: p for p in players}
+    for entry in payload.results:
+        if entry.player_id not in players_by_id:
+            raise HTTPException(status_code=404, detail=f"Player not found: {entry.player_id}")
+
+    # record_mas_test_batch() is keyed by player_name (same acknowledged
+    # limitation as flag_players() elsewhere in this codebase — two
+    # same-named players in one club would collide); matched back to
+    # player_id here via that name for persistence.
+    name_to_player_id = {f"{p.first_name} {p.last_name}": pid for pid, p in players_by_id.items()}
+    results = [
+        {
+            "player_name": f"{players_by_id[e.player_id].first_name} {players_by_id[e.player_id].last_name}",
+            "raw_result_kmh": e.raw_result_kmh,
+        }
+        for e in payload.results
+    ]
+
+    try:
+        batch = record_mas_test_batch(results, payload.protocol_key, payload.test_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    saved_player_ids = []
+    for record in batch["records"]:
+        player_id = name_to_player_id[record.player_name]
+        db.add(
+            MasTest(
+                player_id=player_id,
+                club_id=current_user.club_id,
+                test_date=record.test_date,
+                protocol=record.protocol_name,
+                mas_kmh=record.mas_kmh,
+                created_by=current_user.id,
+            )
+        )
+        saved_player_ids.append(player_id)
+    db.commit()
+
+    synced = _sync_mas_test_calendar(current_user.club_id, db)
+
+    skipped_player_ids = [name_to_player_id[name] for name in batch["skipped_players"]]
+    return RecordMasTestBatchResponse(
+        saved_player_ids=saved_player_ids,
+        skipped_player_ids=skipped_player_ids,
         calendar_events_synced=len(synced),
     )
 

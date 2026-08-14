@@ -6,7 +6,9 @@ import {
   getNextTrainingOverview,
   getRecentSessions,
   getSessionDetail,
-  proposeTrainingAuto,
+  getVormenLibrary,
+  getVormTarget,
+  proposeWeek,
   recalculateComposition,
 } from "../api/client";
 
@@ -18,8 +20,6 @@ const FOCUS_LABELS = {
   recovery: "Herstel",
 };
 
-const BOUT_VORMEN = new Set(["ssg", "msg", "lsg", "transitie"]);
-
 function fmtDate(dateStr) {
   if (!dateStr) return "—";
   return new Date(dateStr).toLocaleDateString("nl-BE", { day: "numeric", month: "short", year: "numeric" });
@@ -27,6 +27,301 @@ function fmtDate(dateStr) {
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function repsValue(block, vormenByKey) {
+  const isBout = vormenByKey[block.vorm]?.is_bout_vorm;
+  return isBout ? block.num_bouts : block.duration_min;
+}
+
+function repsLabel(block, vormenByKey) {
+  const isBout = vormenByKey[block.vorm]?.is_bout_vorm;
+  return isBout
+    ? `${block.num_bouts}x ${block.bout_duration_min}' (rust ${block.rest_between_bouts_min}')`
+    : `${block.duration_min}'`;
+}
+
+/** One proposed training of the active week: fetches its own oefenvormen
+ * composition on first expand, then lets the coach adjust each block's
+ * reps (num_bouts for partijvormen, duration_min for continue vormen — never
+ * the bout length itself), add extra blocks, skip a block by setting it to
+ * 0, and finalize. */
+function SessionProposalCard({ proposal, numPlayers, vormenLibrary, defaultSessionDate, onFinalized }) {
+  const vormenByKey = useMemo(() => Object.fromEntries(vormenLibrary.map((v) => [v.vorm, v])), [vormenLibrary]);
+
+  const [expanded, setExpanded] = useState(false);
+  const [composition, setComposition] = useState(null);
+  const [skipVormen, setSkipVormen] = useState(new Set());
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [busyIndex, setBusyIndex] = useState(null); // index of the block currently being recalculated
+
+  const [addVorm, setAddVorm] = useState("");
+  const [addReps, setAddReps] = useState("1");
+  const [adding, setAdding] = useState(false);
+
+  const [sessionDate, setSessionDate] = useState(defaultSessionDate);
+  const [finalizing, setFinalizing] = useState(false);
+  const [finalizeError, setFinalizeError] = useState(null);
+  const [finalizeConfirmation, setFinalizeConfirmation] = useState(null);
+
+  const loadComposition = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const comp = await getCompositionProposal(proposal.session_id, { num_players: Number(numPlayers) });
+      setComposition(comp);
+      setSkipVormen(new Set());
+    } catch (err) {
+      setError(err.response?.data?.detail ?? err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleExpand = () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !composition) loadComposition();
+  };
+
+  const recalc = async (blocks, skipSet) => {
+    try {
+      const result = await recalculateComposition(proposal.session_id, {
+        blocks,
+        target_distance_km: composition.target_distance_km,
+        skip_vormen: Array.from(skipSet),
+      });
+      setComposition((c) => ({ ...c, ...result, blocks }));
+    } catch (err) {
+      setError(err.response?.data?.detail ?? err.message);
+    }
+  };
+
+  const updateBlockReps = async (index, rawValue) => {
+    const block = composition.blocks[index];
+    const value = Number(rawValue);
+    const nextSkip = new Set(skipVormen);
+
+    if (!rawValue || value <= 0) {
+      nextSkip.add(block.vorm);
+      setSkipVormen(nextSkip);
+      await recalc(composition.blocks, nextSkip);
+      return;
+    }
+    nextSkip.delete(block.vorm);
+
+    setBusyIndex(index);
+    setError(null);
+    try {
+      const isBout = vormenByKey[block.vorm]?.is_bout_vorm;
+      const payload = isBout
+        ? { vorm: block.vorm, num_bouts: value, num_players: Number(numPlayers) }
+        : { vorm: block.vorm, duration_min: value, num_players: Number(numPlayers) };
+      const updatedBlock = await getVormTarget(proposal.session_id, payload);
+      const newBlocks = composition.blocks.map((b, i) => (i === index ? updatedBlock : b));
+      setSkipVormen(nextSkip);
+      await recalc(newBlocks, nextSkip);
+    } catch (err) {
+      setError(err.response?.data?.detail ?? err.message);
+    } finally {
+      setBusyIndex(null);
+    }
+  };
+
+  const handleAddBlock = async () => {
+    const vormMeta = vormenByKey[addVorm];
+    if (!vormMeta) return;
+    setAdding(true);
+    setError(null);
+    try {
+      const value = Number(addReps);
+      const payload = vormMeta.is_bout_vorm
+        ? { vorm: addVorm, num_bouts: value, num_players: Number(numPlayers) }
+        : { vorm: addVorm, duration_min: value, num_players: Number(numPlayers) };
+      const newBlock = await getVormTarget(proposal.session_id, payload);
+      const newBlocks = [...composition.blocks, newBlock];
+      await recalc(newBlocks, skipVormen);
+      setAddVorm("");
+      setAddReps("1");
+    } catch (err) {
+      setError(err.response?.data?.detail ?? err.message);
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleFinalize = async () => {
+    setFinalizing(true);
+    setFinalizeError(null);
+    setFinalizeConfirmation(null);
+    try {
+      const finalBlocks = composition.blocks.filter((b) => !skipVormen.has(b.vorm));
+      await finalizeSession(proposal.session_id, {
+        session_date: sessionDate,
+        blocks: finalBlocks,
+        skip_vormen: Array.from(skipVormen),
+      });
+      setFinalizeConfirmation("Sessie afgerond en opgeslagen in Recente sessies.");
+      onFinalized();
+    } catch (err) {
+      setFinalizeError(err.response?.data?.detail ?? err.message);
+    } finally {
+      setFinalizing(false);
+    }
+  };
+
+  return (
+    <div className="bg-gray-950/60 border border-white/10 rounded-xl overflow-hidden">
+      <button
+        onClick={toggleExpand}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-white/[0.03] transition-colors"
+      >
+        <div>
+          <p className="text-white font-medium text-sm">
+            Sessie {proposal.session_index} — {proposal.suggested_session_type}
+          </p>
+          <p className="text-xs text-gray-500">
+            {proposal.adjusted_duration_min}' · {proposal.adjusted_distance_km} km · intensiteit{" "}
+            {Math.round(proposal.intensity_pct_mas_low * 100)}-{Math.round(proposal.intensity_pct_mas_high * 100)}%
+            MAS
+          </p>
+        </div>
+        <span className="text-gray-400 text-xs shrink-0">{expanded ? "Inklappen ▲" : "Samenstellen ▼"}</span>
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-4 space-y-4 border-t border-white/10 pt-4">
+          <p className="text-xs text-gray-500">{proposal.adjustment_note}</p>
+          {proposal.player_flags.length > 0 && (
+            <ul className="space-y-0.5">
+              {proposal.player_flags.map((f, i) => (
+                <li key={i} className="text-[11px] text-amber-400">
+                  {f.player_name}: {f.detail}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {loading && <p className="text-gray-400 text-sm">Oefenvormen laden…</p>}
+          {error && <p className="text-red-400 text-sm">{error}</p>}
+
+          {composition && (
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left text-gray-300 min-w-[560px]">
+                  <thead>
+                    <tr className="text-[10px] uppercase tracking-wider text-gray-500 border-b border-white/10">
+                      <th className="px-3 py-2 font-medium">Vorm</th>
+                      <th className="px-3 py-2 font-medium">Opzet</th>
+                      <th className="px-3 py-2 font-medium">
+                        Herhalingen (bouts) / duur — 0 = overslaan
+                      </th>
+                      <th className="px-3 py-2 font-medium">Afstand</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {composition.blocks.map((b, i) => {
+                      const skipped = skipVormen.has(b.vorm);
+                      const isBout = vormenByKey[b.vorm]?.is_bout_vorm;
+                      return (
+                        <tr key={i} className={`border-b border-white/5 last:border-b-0 ${skipped ? "opacity-40" : ""}`}>
+                          <td className="px-3 py-2 font-medium text-white">{b.label}</td>
+                          <td className="px-3 py-2 text-xs text-gray-400">{b.format_hint || "—"}</td>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="number"
+                                min="0"
+                                step={isBout ? 1 : 1}
+                                defaultValue={repsValue(b, vormenByKey)}
+                                onBlur={(e) => updateBlockReps(i, e.target.value)}
+                                disabled={busyIndex === i}
+                                className="bg-gray-900 border border-white/10 text-white rounded-lg px-2 py-1 text-xs w-16 focus:outline-none focus:ring-2 ring-brand"
+                              />
+                              <span className="text-xs text-gray-500">{isBout ? "bouts" : "min"}</span>
+                            </div>
+                            <p className="text-[11px] text-gray-500 mt-0.5">{repsLabel(b, vormenByKey)}</p>
+                          </td>
+                          <td className="px-3 py-2">{b.distance_km} km</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex flex-wrap items-end gap-2 bg-white/[0.02] border border-white/10 rounded-lg p-3">
+                <label className="flex flex-col text-gray-400 text-[11px] gap-1">
+                  Vorm toevoegen
+                  <select
+                    value={addVorm}
+                    onChange={(e) => {
+                      setAddVorm(e.target.value);
+                      const meta = vormenByKey[e.target.value];
+                      setAddReps(meta?.is_bout_vorm ? "1" : "10");
+                    }}
+                    className="bg-gray-900 border border-white/10 text-white rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 ring-brand"
+                  >
+                    <option value="">Kies een vorm…</option>
+                    {vormenLibrary.map((v) => (
+                      <option key={v.vorm} value={v.vorm}>
+                        {v.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex flex-col text-gray-400 text-[11px] gap-1">
+                  {vormenByKey[addVorm]?.is_bout_vorm ? "Bouts" : "Duur (min)"}
+                  <input
+                    type="number"
+                    min="1"
+                    value={addReps}
+                    onChange={(e) => setAddReps(e.target.value)}
+                    className="bg-gray-900 border border-white/10 text-white rounded-lg px-2 py-1.5 text-xs w-20 focus:outline-none focus:ring-2 ring-brand"
+                  />
+                </label>
+                <button
+                  onClick={handleAddBlock}
+                  disabled={!addVorm || adding}
+                  className="bg-white/5 hover:bg-white/10 border border-white/10 text-white px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50"
+                >
+                  {adding ? "Bezig…" : "+ Blok toevoegen"}
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+                <p className="text-gray-400">
+                  Totaal: <span className="text-white font-medium">{composition.total_distance_km} km</span> ·{" "}
+                  {composition.total_work_duration_min}' werktijd · {composition.total_clock_time_min}' op het veld
+                </p>
+                <label className="flex items-center gap-2 text-xs text-gray-400">
+                  Sessiedatum
+                  <input
+                    type="date"
+                    value={sessionDate}
+                    onChange={(e) => setSessionDate(e.target.value)}
+                    className="bg-gray-900 border border-white/10 text-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 ring-brand"
+                  />
+                </label>
+              </div>
+              <p className="text-xs text-gray-500">{composition.deviation_note}</p>
+
+              <button
+                onClick={handleFinalize}
+                disabled={finalizing}
+                className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium w-full disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {finalizing ? "Bezig…" : "Sessie afronden"}
+              </button>
+              {finalizeError && <p className="text-red-400 text-sm">{finalizeError}</p>}
+              {finalizeConfirmation && <p className="text-emerald-400 text-sm">{finalizeConfirmation}</p>}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function NextTraining() {
@@ -45,20 +340,12 @@ export default function NextTraining() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState(null);
 
-  const [kmPerTraining, setKmPerTraining] = useState("5.5");
   const [numPlayers, setNumPlayers] = useState("");
-  const [sessionDate, setSessionDate] = useState(todayIso());
+  const [vormenLibrary, setVormenLibrary] = useState([]);
 
-  const [proposal, setProposal] = useState(null); // TrainingProposalSchema (has session_id + target_*)
-  const [composition, setComposition] = useState(null); // SessionCompositionProposalSchema
-  const [skipVormen, setSkipVormen] = useState(new Set());
+  const [weekProposals, setWeekProposals] = useState(null);
   const [generating, setGenerating] = useState(false);
-  const [compositionError, setCompositionError] = useState(null);
-  const [recalculating, setRecalculating] = useState(false);
-
-  const [finalizing, setFinalizing] = useState(false);
-  const [finalizeError, setFinalizeError] = useState(null);
-  const [finalizeConfirmation, setFinalizeConfirmation] = useState(null);
+  const [weekError, setWeekError] = useState(null);
 
   const loadOverview = () => {
     setOverviewLoading(true);
@@ -67,7 +354,6 @@ export default function NextTraining() {
         setOverview(data);
         setOverviewError(null);
         setNumPlayers((prev) => (prev === "" ? String(data.squad_count) : prev));
-        setSessionDate((prev) => (prev === todayIso() && data.next_session ? data.next_session.session_date : prev));
       })
       .catch((err) => setOverviewError(err.response?.data?.detail ?? err.message))
       .finally(() => setOverviewLoading(false));
@@ -87,78 +373,32 @@ export default function NextTraining() {
   useEffect(() => {
     loadOverview();
     loadRecent();
+    getVormenLibrary()
+      .then(setVormenLibrary)
+      .catch(() => {});
   }, []);
 
   const scrollToComposition = () => {
     compositionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const handleGenerate = async () => {
+  const handleGenerateWeek = async () => {
     setGenerating(true);
-    setCompositionError(null);
-    setProposal(null);
-    setComposition(null);
-    setSkipVormen(new Set());
-    setFinalizeConfirmation(null);
+    setWeekError(null);
+    setWeekProposals(null);
     try {
-      const prop = await proposeTrainingAuto(Number(kmPerTraining));
-      setProposal(prop);
-      const players = numPlayers === "" ? overview?.squad_count ?? 1 : Number(numPlayers);
-      const comp = await getCompositionProposal(prop.session_id, { num_players: players });
-      setComposition(comp);
+      const proposals = await proposeWeek();
+      setWeekProposals(proposals);
     } catch (err) {
-      setCompositionError(err.response?.data?.detail ?? err.message);
+      setWeekError(err.response?.data?.detail ?? err.message);
     } finally {
       setGenerating(false);
     }
   };
 
-  const toggleSkip = async (vorm) => {
-    if (!proposal || !composition) return;
-    const next = new Set(skipVormen);
-    if (next.has(vorm)) next.delete(vorm);
-    else next.add(vorm);
-    setSkipVormen(next);
-
-    setRecalculating(true);
-    setCompositionError(null);
-    try {
-      const result = await recalculateComposition(proposal.session_id, {
-        blocks: composition.blocks,
-        target_distance_km: composition.target_distance_km,
-        skip_vormen: Array.from(next),
-      });
-      setComposition((c) => ({ ...c, ...result }));
-    } catch (err) {
-      setCompositionError(err.response?.data?.detail ?? err.message);
-    } finally {
-      setRecalculating(false);
-    }
-  };
-
-  const handleFinalize = async () => {
-    if (!proposal || !composition) return;
-    setFinalizing(true);
-    setFinalizeError(null);
-    setFinalizeConfirmation(null);
-    try {
-      const finalBlocks = composition.blocks.filter((b) => !skipVormen.has(b.vorm));
-      await finalizeSession(proposal.session_id, {
-        session_date: sessionDate,
-        blocks: finalBlocks,
-        skip_vormen: Array.from(skipVormen),
-      });
-      setFinalizeConfirmation("Sessie afgerond en opgeslagen in Recente sessies.");
-      setProposal(null);
-      setComposition(null);
-      setSkipVormen(new Set());
-      loadRecent();
-      loadOverview();
-    } catch (err) {
-      setFinalizeError(err.response?.data?.detail ?? err.message);
-    } finally {
-      setFinalizing(false);
-    }
+  const handleSessionFinalized = () => {
+    loadRecent();
+    loadOverview();
   };
 
   const openDetail = async (id) => {
@@ -222,12 +462,14 @@ export default function NextTraining() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overview]);
 
+  const defaultSessionDate = overview?.next_session?.session_date ?? todayIso();
+
   return (
     <div className="max-w-6xl mx-auto py-12 px-4 space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-white tracking-tight mb-1.5">Next Training</h1>
+        <h1 className="text-3xl font-bold text-white tracking-tight mb-1.5">Dashboard</h1>
         <p className="text-sm text-gray-400 max-w-2xl leading-relaxed">
-          Statusoverzicht van de spelersgroep, de eerstvolgende sessie samenstellen, en de recente
+          Statusoverzicht van de spelersgroep, de trainingen van deze week samenstellen, en de recente
           sessiegeschiedenis.
         </p>
       </div>
@@ -265,34 +507,14 @@ export default function NextTraining() {
 
       <div ref={compositionRef} className="bg-gray-900/60 border border-white/10 rounded-2xl p-6 shadow-xl shadow-black/20 space-y-5">
         <div>
-          <h2 className="text-white font-semibold mb-1">Sessie samenstellen</h2>
+          <h2 className="text-white font-semibold mb-1">Trainingen deze week samenstellen</h2>
           <p className="text-sm text-gray-400">
-            Genereert een km-doel op basis van de actieve cyclusweek en de teambelasting, en stelt daarna
-            concrete oefenvormen voor.
+            Genereert automatisch een voorstel voor elke training van de actieve cyclusweek, op basis
+            van de teambelasting — jij geeft enkel het aantal aanwezige spelers door.
           </p>
         </div>
 
         <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col text-gray-300 text-xs gap-1">
-            Sessiedatum
-            <input
-              type="date"
-              value={sessionDate}
-              onChange={(e) => setSessionDate(e.target.value)}
-              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ring-brand"
-            />
-          </label>
-          <label className="flex flex-col text-gray-300 text-xs gap-1">
-            Km-doel per training
-            <input
-              type="number"
-              step="0.1"
-              min="0.1"
-              value={kmPerTraining}
-              onChange={(e) => setKmPerTraining(e.target.value)}
-              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2 text-sm w-32 focus:outline-none focus:ring-2 ring-brand"
-            />
-          </label>
           <label className="flex flex-col text-gray-300 text-xs gap-1">
             Aantal spelers aanwezig
             <input
@@ -304,98 +526,28 @@ export default function NextTraining() {
             />
           </label>
           <button
-            onClick={handleGenerate}
-            disabled={generating}
+            onClick={handleGenerateWeek}
+            disabled={generating || !numPlayers}
             className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {generating ? "Bezig…" : "Stel training samen"}
+            {generating ? "Bezig…" : "Stel trainingen samen"}
           </button>
         </div>
 
-        {compositionError && <p className="text-red-400 text-sm">{compositionError}</p>}
+        {weekError && <p className="text-red-400 text-sm">{weekError}</p>}
 
-        {proposal && (
-          <div className="bg-gray-950/60 border border-white/10 rounded-xl p-4 text-sm text-gray-300 space-y-1">
-            <p className="text-white font-medium">{proposal.suggested_session_type}</p>
-            <p className="text-xs text-gray-500">
-              {proposal.adjusted_duration_min}' · {proposal.adjusted_distance_km} km · intensiteit{" "}
-              {Math.round(proposal.intensity_pct_mas_low * 100)}-{Math.round(proposal.intensity_pct_mas_high * 100)}%
-              MAS
-            </p>
-            <p className="text-xs text-gray-500">{proposal.adjustment_note}</p>
-            {proposal.player_flags.length > 0 && (
-              <ul className="pt-1.5 mt-1.5 border-t border-white/10 space-y-0.5">
-                {proposal.player_flags.map((f, i) => (
-                  <li key={i} className="text-[11px] text-amber-400">
-                    {f.player_name}: {f.detail}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-
-        {composition && (
+        {weekProposals && (
           <div className="space-y-3">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left text-gray-300 min-w-[640px]">
-                <thead>
-                  <tr className="text-[10px] uppercase tracking-wider text-gray-500 border-b border-white/10">
-                    <th className="px-3 py-2 font-medium">Vorm</th>
-                    <th className="px-3 py-2 font-medium">Opzet</th>
-                    <th className="px-3 py-2 font-medium">Duur / bouts</th>
-                    <th className="px-3 py-2 font-medium">Afstand</th>
-                    <th className="px-3 py-2 font-medium">0' — sla over</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {composition.blocks.map((b, i) => {
-                    const skipped = skipVormen.has(b.vorm);
-                    return (
-                      <tr
-                        key={i}
-                        className={`border-b border-white/5 last:border-b-0 ${skipped ? "opacity-40" : ""}`}
-                      >
-                        <td className="px-3 py-2 font-medium text-white">{b.label}</td>
-                        <td className="px-3 py-2 text-xs text-gray-400">{b.format_hint || "—"}</td>
-                        <td className="px-3 py-2">
-                          {BOUT_VORMEN.has(b.vorm)
-                            ? `${b.num_bouts}x ${b.bout_duration_min}' (rust ${b.rest_between_bouts_min}')`
-                            : `${b.duration_min}'`}
-                        </td>
-                        <td className="px-3 py-2">{b.distance_km} km</td>
-                        <td className="px-3 py-2">
-                          <input
-                            type="checkbox"
-                            checked={skipped}
-                            onChange={() => toggleSkip(b.vorm)}
-                            disabled={recalculating}
-                            className="rounded border-white/20 bg-gray-950"
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-              <p className="text-gray-400">
-                Totaal: <span className="text-white font-medium">{composition.total_distance_km} km</span> ·{" "}
-                {composition.total_work_duration_min}' werktijd · {composition.total_clock_time_min}' op het veld
-              </p>
-              <button
-                onClick={handleFinalize}
-                disabled={finalizing}
-                className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {finalizing ? "Bezig…" : "Sessie afronden"}
-              </button>
-            </div>
-            <p className="text-xs text-gray-500">{composition.deviation_note}</p>
-            {finalizeError && <p className="text-red-400 text-sm">{finalizeError}</p>}
-            {finalizeConfirmation && <p className="text-emerald-400 text-sm">{finalizeConfirmation}</p>}
+            {weekProposals.map((proposal) => (
+              <SessionProposalCard
+                key={proposal.session_id}
+                proposal={proposal}
+                numPlayers={numPlayers}
+                vormenLibrary={vormenLibrary}
+                defaultSessionDate={defaultSessionDate}
+                onFinalized={handleSessionFinalized}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -446,10 +598,7 @@ export default function NextTraining() {
       </div>
 
       {detailId && (
-        <div
-          className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50"
-          onClick={closeDetail}
-        >
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick={closeDetail}>
           <div
             className="bg-gray-900 border border-white/10 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-y-auto p-6 space-y-4"
             onClick={(e) => e.stopPropagation()}
@@ -485,7 +634,7 @@ export default function NextTraining() {
                         <tr key={i} className="border-b border-white/5 last:border-b-0">
                           <td className="px-3 py-2 font-medium text-white">{b.label}</td>
                           <td className="px-3 py-2">
-                            {BOUT_VORMEN.has(b.vorm)
+                            {b.num_bouts != null
                               ? `${b.num_bouts}x ${b.bout_duration_min}' (rust ${b.rest_between_bouts_min}')`
                               : `${b.duration_min}'`}
                           </td>

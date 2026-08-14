@@ -15,6 +15,7 @@ from app.schemas_dashboards import (
     DryRunTopupRequest,
     DryRunTopUpSchema,
     FinalizeSessionRequest,
+    OefenvormLibraryEntrySchema,
     PlayerFlagSchema,
     RecalculateCompositionRequest,
     RecalculateCompositionResponse,
@@ -113,6 +114,24 @@ def _composition_proposal(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return SessionCompositionProposalSchema.model_validate(result)
+
+
+@router.get("/vormen", response_model=list[OefenvormLibraryEntrySchema])
+def list_vormen(current_user: User = Depends(get_current_user)):
+    """De volledige oefenvormenbibliotheek (OEFENVORM_LIBRARY), voor de
+    'blok toevoegen'-picker op Next Training: welke vormen bestaan er, en is
+    het een partijvorm (enkel num_bouts instelbaar) of een continue vorm
+    (enkel duration_min instelbaar) — single source of truth blijft de
+    backend, niet hardcoded in de frontend."""
+    return [
+        OefenvormLibraryEntrySchema(
+            vorm=vorm.value,
+            label=profile.label,
+            is_bout_vorm=profile.bout_duration_min is not None,
+            bout_duration_min=profile.bout_duration_min,
+        )
+        for vorm, profile in OEFENVORM_LIBRARY.items()
+    ]
 
 
 @router.get("/{session_id}/composition-proposal", response_model=SessionCompositionProposalSchema)

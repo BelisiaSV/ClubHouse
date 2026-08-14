@@ -18,6 +18,7 @@ from app.models import WeekFocus as DbWeekFocus
 from app.schemas_dashboards import (
     BuildCycleRequest,
     CurrentCyclesResponse,
+    EditFirstCycleRequest,
     NextCycleRequest,
     PatchActiveCycleRequest,
     QueueNextCycleRequest,
@@ -31,7 +32,9 @@ from app.services.periodization import CycleWeek as ServiceCycleWeek
 from app.services.periodization import Season
 from app.services.periodization import TrainingCycle as ServiceTrainingCycle
 from app.services.periodization import WeekFocus as ServiceWeekFocus
-from app.services.periodization import build_cycle, get_active_cycle_and_week, handle_match_cancellation
+from app.services.periodization import align_cycle_to_nearest_match, build_cycle
+from app.services.periodization import edit_first_cycle_of_season as svc_edit_first_cycle_of_season
+from app.services.periodization import get_active_cycle_and_week, handle_match_cancellation
 from app.services.periodization import queue_next_cycle as svc_queue_next_cycle
 from app.services.periodization import start_new_season as svc_start_new_season
 from app.services.platform_admin import ModuleKey
@@ -47,6 +50,22 @@ _LENGTH_WEEKS_TO_DB = {
     8: DbCycleLength.EIGHT_WEEKS,
 }
 _DB_LENGTH_TO_WEEKS = {v: k for k, v in _LENGTH_WEEKS_TO_DB.items()}
+
+
+def _club_match_dates(club_id: uuid.UUID, db: Session) -> list[date]:
+    """Real Match rows (scheduled/played), normalized to UTC calendar dates
+    — shared by _load_cycle_from_db's per-week match counting and
+    realign_season_to_matches's cycle-alignment, so both agree on exactly
+    which matches count."""
+    return [
+        d.astimezone(timezone.utc).date()
+        for d in db.scalars(
+            select(DbMatch.match_date).where(
+                DbMatch.club_id == club_id,
+                DbMatch.status.in_([DbMatchStatus.SCHEDULED, DbMatchStatus.PLAYED]),
+            )
+        ).all()
+    ]
 
 
 def _load_cycle_from_db(db_cycle: DbTrainingCycle, club: Club, db: Session) -> ServiceTrainingCycle:
@@ -72,22 +91,7 @@ def _load_cycle_from_db(db_cycle: DbTrainingCycle, club: Club, db: Session) -> S
     # per-week query with a date-range WHERE clause — simpler than juggling
     # match_date's timestamptz vs. the weeks' plain dates, and cheap at the
     # data volumes a single club ever has.
-    #
-    # Explicitly normalized to UTC before taking .date(): a tz-aware
-    # datetime's .date() reads off whatever tzinfo is attached to it, which
-    # for a value coming back through psycopg2/SQLAlchemy follows the DB
-    # connection's session TimeZone setting — that can differ between a
-    # local Postgres (usually UTC) and Supabase's pooled connection, silently
-    # shifting a match into the wrong calendar day/week without this.
-    match_dates = [
-        d.astimezone(timezone.utc).date()
-        for d in db.scalars(
-            select(DbMatch.match_date).where(
-                DbMatch.club_id == club.id,
-                DbMatch.status.in_([DbMatchStatus.SCHEDULED, DbMatchStatus.PLAYED]),
-            )
-        ).all()
-    ]
+    match_dates = _club_match_dates(club.id, db)
 
     weeks = []
     for i, w in enumerate(week_rows):
@@ -135,6 +139,40 @@ def load_season_from_db(club_id: uuid.UUID, db: Session) -> tuple[Season, list[u
         season.cycles.append(_load_cycle_from_db(db_cycle, club, db))
         cycle_db_ids.append(db_cycle.id)
     return season, cycle_db_ids
+
+
+def realign_season_to_matches(club_id: uuid.UUID, db: Session) -> None:
+    """Re-aligns every one of the club's cycles' realization week to the
+    nearest real match (services.periodization.align_cycle_to_nearest_match)
+    — call this whenever a match is added or changed (see
+    app/routers/matches.py), instead of the coach entering a target match
+    date by hand when choosing a cycle. A cycle with no match nearby is left
+    on its template position, unchanged."""
+    season, cycle_db_ids = load_season_from_db(club_id, db)
+    match_dates = _club_match_dates(club_id, db)
+
+    changed = False
+    for cycle, db_cycle_id in zip(season.cycles, cycle_db_ids):
+        chosen = align_cycle_to_nearest_match(cycle, match_dates)
+        if chosen is None:
+            continue
+        changed = True
+        db_cycle = db.get(DbTrainingCycle, db_cycle_id)
+        db_cycle.target_match_date = chosen
+        week_rows = {
+            w.week_number: w
+            for w in db.scalars(
+                select(DbTrainingCycleWeek).where(DbTrainingCycleWeek.training_cycle_id == db_cycle_id)
+            ).all()
+        }
+        for week in cycle.weeks:
+            row = week_rows.get(week.week_number)
+            if row is not None:
+                row.focus = DbWeekFocus(week.focus.value)
+                row.planned_load_pct = week.planned_load_pct
+
+    if changed:
+        db.commit()
 
 
 def _persist_as_active_cycle(cycle, club_id, db: Session) -> DbTrainingCycle:
@@ -327,7 +365,9 @@ def get_current_cycles(
                 update={"id": cycle_db_ids[-1]}
             )
 
-    return CurrentCyclesResponse(active=active_schema, queued=queued_schema)
+    return CurrentCyclesResponse(
+        active=active_schema, queued=queued_schema, can_edit_first_cycle=len(season.cycles) == 1
+    )
 
 
 @router.patch("/cycles/active", response_model=TrainingCycleSchema)
@@ -423,6 +463,66 @@ def start_season(
     return StartSeasonResponse(
         season_id=current_user.club_id,
         cycle=TrainingCycleSchema.model_validate(season.cycles[0]).model_copy(update={"id": db_cycle.id}),
+    )
+
+
+@router.patch("/seasons/{season_id}/first-cycle", response_model=TrainingCycleSchema)
+def edit_first_cycle(
+    season_id: uuid.UUID,
+    payload: EditFirstCycleRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Corrigeert de EERSTE cyclus van een seizoen (startdatum/lengte/piekvolume)
+    — voor wanneer de coach zich vergist heeft bij het starten van het
+    seizoen. Enkel toegestaan zolang er nog geen tweede cyclus is gestart
+    (services.periodization.edit_first_cycle_of_season's guard)."""
+    if season_id != current_user.club_id:
+        raise HTTPException(status_code=404, detail="Seizoen niet gevonden.")
+
+    season, cycle_db_ids = load_season_from_db(current_user.club_id, db)
+    if not season.cycles:
+        raise HTTPException(status_code=404, detail="Geen cyclus gevonden om aan te passen.")
+
+    try:
+        result = svc_edit_first_cycle_of_season(
+            season,
+            new_start_date=payload.start_date,
+            new_length_weeks=payload.length_weeks,
+            new_target_peak_weekly_km=payload.target_peak_weekly_km,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    db_cycle = db.get(DbTrainingCycle, cycle_db_ids[0])
+    db_cycle.name = result.name
+    db_cycle.length_type = _LENGTH_WEEKS_TO_DB[result.length_weeks]
+    db_cycle.start_date = result.start_date
+    db_cycle.end_date = result.end_date()
+    db_cycle.target_peak_weekly_km = result.target_peak_weekly_km
+    db.execute(delete(DbTrainingCycleWeek).where(DbTrainingCycleWeek.training_cycle_id == db_cycle.id))
+    db.flush()
+    for week in result.weeks:
+        db.add(
+            DbTrainingCycleWeek(
+                training_cycle_id=db_cycle.id,
+                week_number=week.week_number,
+                week_start_date=week.week_start_date,
+                focus=DbWeekFocus(week.focus.value),
+                planned_load_pct=week.planned_load_pct,
+            )
+        )
+    db.commit()
+    db.refresh(db_cycle)
+
+    # A corrected start date can shift which real matches now fall inside
+    # the cycle's window — re-align immediately rather than leaving it on
+    # whatever target_match_date the old window had picked.
+    realign_season_to_matches(current_user.club_id, db)
+    db.refresh(db_cycle)
+
+    return TrainingCycleSchema.model_validate(result).model_copy(
+        update={"id": db_cycle.id, "target_match_date": db_cycle.target_match_date}
     )
 
 

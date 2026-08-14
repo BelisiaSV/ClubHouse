@@ -53,7 +53,10 @@ class TrainingCycleSchema(BaseModel):
     name: str
     length_weeks: int
     start_date: date
-    target_match_date: date
+    # Optional: often not yet known when a cycle is chosen — set automatically
+    # by align_cycle_to_nearest_match() once real matches exist in the
+    # calendar, never entered by hand (see services/periodization.py).
+    target_match_date: Optional[date] = None
     target_peak_weekly_km: float = 23.0
     weeks: list[CycleWeekSchema] = Field(default_factory=list)
     shift_count: int = 0
@@ -75,7 +78,10 @@ class BuildCycleRequest(BaseModel):
     name: str
     length_weeks: Literal[4, 6, 8]
     start_date: date
-    target_match_date: date
+    # Not part of the cycle-choosing flow anymore — left optional purely so
+    # the endpoint stays usable programmatically; the frontend never sends
+    # this. See align_cycle_to_nearest_match().
+    target_match_date: Optional[date] = None
     target_peak_weekly_km: float = 23.0
 
 
@@ -88,7 +94,7 @@ class RescheduleCycleRequest(BaseModel):
 
 class QueueNextCycleRequest(BaseModel):
     length_weeks: Literal[4, 6, 8]
-    target_match_date: date
+    target_match_date: Optional[date] = None
     target_peak_weekly_km: float = 23.0
     name: Optional[str] = None
 
@@ -96,6 +102,16 @@ class QueueNextCycleRequest(BaseModel):
 class CurrentCyclesResponse(BaseModel):
     active: Optional[TrainingCycleSchema] = None
     queued: Optional[TrainingCycleSchema] = None
+    # True iff the season has exactly one cycle so far (none started after
+    # it yet) — the frontend only shows the "Cyclus aanpassen" action while
+    # this holds, matching edit_first_cycle_of_season()'s own guard.
+    can_edit_first_cycle: bool = False
+
+
+class EditFirstCycleRequest(BaseModel):
+    start_date: Optional[date] = None
+    length_weeks: Optional[Literal[4, 6, 8]] = None
+    target_peak_weekly_km: Optional[float] = None
 
 
 class PatchActiveCycleRequest(BaseModel):
@@ -137,7 +153,9 @@ class StartSeasonRequest(BaseModel):
     name: str
     start_date: date
     length_weeks: Literal[4, 6, 8]
-    target_match_date: date
+    # Not part of this flow — the coach only picks a start date; the target
+    # match is determined automatically later, see align_cycle_to_nearest_match().
+    target_match_date: Optional[date] = None
     target_peak_weekly_km: float = 23.0
 
 
@@ -153,7 +171,7 @@ class StartSeasonResponse(BaseModel):
 
 class NextCycleRequest(BaseModel):
     length_weeks: Literal[4, 6, 8]
-    target_match_date: date
+    target_match_date: Optional[date] = None
     target_peak_weekly_km: float = 23.0
     name: Optional[str] = None
     # Present only so the endpoint can explicitly reject it with a 400
@@ -228,6 +246,25 @@ class RecordMasTestResponse(BaseModel):
     mas_kmh: float
     protocol_name: str
     test_date: date
+    calendar_events_synced: int
+
+
+class MasTestBatchEntry(BaseModel):
+    player_id: uuid.UUID
+    # None/blank = the coach hasn't filled this player's result in yet —
+    # skipped, not an error (see record_mas_test_batch's docstring).
+    raw_result_kmh: Optional[float] = None
+
+
+class RecordMasTestBatchRequest(BaseModel):
+    protocol_key: str
+    test_date: date
+    results: list[MasTestBatchEntry]
+
+
+class RecordMasTestBatchResponse(BaseModel):
+    saved_player_ids: list[uuid.UUID]
+    skipped_player_ids: list[uuid.UUID]
     calendar_events_synced: int
 
 
@@ -369,6 +406,7 @@ class TrainingProposalSchema(BaseModel):
     adjusted_distance_km: float
     team_readiness_factor: float
     adjustment_note: str
+    session_index: int = 1
     player_flags: list[PlayerFlagSchema]
 
 
@@ -397,6 +435,16 @@ class DryRunTopUpSchema(BaseModel):
     intensity_pct_mas: float
     total_distance_m: float
     instruction: str
+
+
+class OefenvormLibraryEntrySchema(BaseModel):
+    vorm: str
+    label: str
+    # False = continue vorm (coach stelt duration_min in), True = partijvorm
+    # met vaste bloktijd (coach stelt enkel num_bouts in) — bepaalt welk
+    # veld de frontend's "blok toevoegen"/reps-editor moet tonen.
+    is_bout_vorm: bool
+    bout_duration_min: Optional[float] = None
 
 
 class VormTargetSchema(BaseModel):

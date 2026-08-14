@@ -127,12 +127,9 @@ export const patchActiveCycle = (payload) =>
 export const getKmOverview = (cycleId) =>
   client.get(`/api/periodization/training-cycles/${cycleId}/km-overview`).then((res) => res.data);
 
-// ---- Periodization: season start / first-cycle correction ----
+// ---- Periodization: season start ----
 export const startSeason = (payload) =>
   client.post("/api/periodization/seasons", payload).then((res) => res.data);
-
-export const editFirstCycle = (seasonId, payload) =>
-  client.patch(`/api/periodization/seasons/${seasonId}/first-cycle`, payload).then((res) => res.data);
 
 // ---- MAS testing: protocols, recording, calendar ----
 export const getMasTestProtocols = () =>

@@ -18,7 +18,6 @@ from app.models import WeekFocus as DbWeekFocus
 from app.schemas_dashboards import (
     BuildCycleRequest,
     CurrentCyclesResponse,
-    EditFirstCycleRequest,
     NextCycleRequest,
     PatchActiveCycleRequest,
     QueueNextCycleRequest,
@@ -33,7 +32,7 @@ from app.services.periodization import Season
 from app.services.periodization import TrainingCycle as ServiceTrainingCycle
 from app.services.periodization import WeekFocus as ServiceWeekFocus
 from app.services.periodization import align_cycle_to_nearest_match, build_cycle
-from app.services.periodization import edit_first_cycle_of_season as svc_edit_first_cycle_of_season
+from app.services.periodization import edit_active_cycle as svc_edit_active_cycle
 from app.services.periodization import get_active_cycle_and_week, handle_match_cancellation
 from app.services.periodization import queue_next_cycle as svc_queue_next_cycle
 from app.services.periodization import start_new_season as svc_start_new_season
@@ -365,9 +364,8 @@ def get_current_cycles(
                 update={"id": cycle_db_ids[-1]}
             )
 
-    return CurrentCyclesResponse(
-        active=active_schema, queued=queued_schema, can_edit_first_cycle=len(season.cycles) == 1
-    )
+    can_edit_active_cycle = bool(active_cycle is not None and season.cycles[-1] is active_cycle)
+    return CurrentCyclesResponse(active=active_schema, queued=queued_schema, can_edit_active_cycle=can_edit_active_cycle)
 
 
 @router.patch("/cycles/active", response_model=TrainingCycleSchema)
@@ -376,13 +374,11 @@ def patch_active_cycle(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Past de lopende, actieve cyclus aan — enkel de veilige velden (naam,
-    doelwedstrijddatum, piekvolume), nooit de lengte/startdatum: de weken
-    van een reeds actieve cyclus liggen al vast op datums waar
-    player_weekly_distance_log-rijen al naar verwijzen (via
-    training_cycle_id/week_number), dus een structurele wijziging zou die
-    geschiedenis kunnen breken. Gebruik POST /cycles om de actieve cyclus
-    volledig te vervangen als dat toch nodig is."""
+    """Past de lopende, actieve cyclus aan. Naam en piekvolume zijn altijd
+    veilig aan te passen in-place. start_date/length_weeks zijn structureel
+    (herbouwen de weken volledig, via services.periodization.
+    edit_active_cycle) en enkel toegestaan zolang er nog geen volgende
+    cyclus is klaargezet — zie dat functiedoc voor waarom."""
     today = date.today()
     season, cycle_db_ids = load_season_from_db(current_user.club_id, db)
     active_cycle, _ = get_active_cycle_and_week(season, today)
@@ -391,21 +387,59 @@ def patch_active_cycle(
 
     idx = _find_cycle_index(season, active_cycle)
     db_cycle = db.get(DbTrainingCycle, cycle_db_ids[idx])
-
     updates = payload.model_dump(exclude_unset=True)
-    if "name" in updates:
-        active_cycle.name = updates["name"]
-        db_cycle.name = updates["name"]
-    if "target_match_date" in updates:
-        active_cycle.target_match_date = updates["target_match_date"]
-        db_cycle.target_match_date = updates["target_match_date"]
-    if "target_peak_weekly_km" in updates:
-        active_cycle.target_peak_weekly_km = updates["target_peak_weekly_km"]
-        db_cycle.target_peak_weekly_km = updates["target_peak_weekly_km"]
 
-    db.commit()
+    if "start_date" in updates or "length_weeks" in updates:
+        try:
+            result = svc_edit_active_cycle(
+                season, today,
+                new_start_date=updates.get("start_date"),
+                new_length_weeks=updates.get("length_weeks"),
+                new_target_peak_weekly_km=updates.get("target_peak_weekly_km"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if "name" in updates:
+            result.name = updates["name"]
 
-    return TrainingCycleSchema.model_validate(active_cycle).model_copy(update={"id": db_cycle.id})
+        db_cycle.name = result.name
+        db_cycle.length_type = _LENGTH_WEEKS_TO_DB[result.length_weeks]
+        db_cycle.start_date = result.start_date
+        db_cycle.end_date = result.end_date()
+        db_cycle.target_peak_weekly_km = result.target_peak_weekly_km
+        db.execute(delete(DbTrainingCycleWeek).where(DbTrainingCycleWeek.training_cycle_id == db_cycle.id))
+        db.flush()
+        for week in result.weeks:
+            db.add(
+                DbTrainingCycleWeek(
+                    training_cycle_id=db_cycle.id,
+                    week_number=week.week_number,
+                    week_start_date=week.week_start_date,
+                    focus=DbWeekFocus(week.focus.value),
+                    planned_load_pct=week.planned_load_pct,
+                )
+            )
+        db.commit()
+        db.refresh(db_cycle)
+
+        # A corrected start date/length can shift which real matches now
+        # fall inside the cycle's window — re-align immediately rather
+        # than leaving target_match_date on whatever the old window picked.
+        realign_season_to_matches(current_user.club_id, db)
+        db.refresh(db_cycle)
+        active_cycle = result
+    else:
+        if "name" in updates:
+            active_cycle.name = updates["name"]
+            db_cycle.name = updates["name"]
+        if "target_peak_weekly_km" in updates:
+            active_cycle.target_peak_weekly_km = updates["target_peak_weekly_km"]
+            db_cycle.target_peak_weekly_km = updates["target_peak_weekly_km"]
+        db.commit()
+
+    return TrainingCycleSchema.model_validate(active_cycle).model_copy(
+        update={"id": db_cycle.id, "target_match_date": db_cycle.target_match_date}
+    )
 
 
 @router.get("/training-cycles/{cycle_id}/km-overview", response_model=list[WeeklyKmOverviewSchema])
@@ -463,66 +497,6 @@ def start_season(
     return StartSeasonResponse(
         season_id=current_user.club_id,
         cycle=TrainingCycleSchema.model_validate(season.cycles[0]).model_copy(update={"id": db_cycle.id}),
-    )
-
-
-@router.patch("/seasons/{season_id}/first-cycle", response_model=TrainingCycleSchema)
-def edit_first_cycle(
-    season_id: uuid.UUID,
-    payload: EditFirstCycleRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Corrigeert de EERSTE cyclus van een seizoen (startdatum/lengte/piekvolume)
-    — voor wanneer de coach zich vergist heeft bij het starten van het
-    seizoen. Enkel toegestaan zolang er nog geen tweede cyclus is gestart
-    (services.periodization.edit_first_cycle_of_season's guard)."""
-    if season_id != current_user.club_id:
-        raise HTTPException(status_code=404, detail="Seizoen niet gevonden.")
-
-    season, cycle_db_ids = load_season_from_db(current_user.club_id, db)
-    if not season.cycles:
-        raise HTTPException(status_code=404, detail="Geen cyclus gevonden om aan te passen.")
-
-    try:
-        result = svc_edit_first_cycle_of_season(
-            season,
-            new_start_date=payload.start_date,
-            new_length_weeks=payload.length_weeks,
-            new_target_peak_weekly_km=payload.target_peak_weekly_km,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    db_cycle = db.get(DbTrainingCycle, cycle_db_ids[0])
-    db_cycle.name = result.name
-    db_cycle.length_type = _LENGTH_WEEKS_TO_DB[result.length_weeks]
-    db_cycle.start_date = result.start_date
-    db_cycle.end_date = result.end_date()
-    db_cycle.target_peak_weekly_km = result.target_peak_weekly_km
-    db.execute(delete(DbTrainingCycleWeek).where(DbTrainingCycleWeek.training_cycle_id == db_cycle.id))
-    db.flush()
-    for week in result.weeks:
-        db.add(
-            DbTrainingCycleWeek(
-                training_cycle_id=db_cycle.id,
-                week_number=week.week_number,
-                week_start_date=week.week_start_date,
-                focus=DbWeekFocus(week.focus.value),
-                planned_load_pct=week.planned_load_pct,
-            )
-        )
-    db.commit()
-    db.refresh(db_cycle)
-
-    # A corrected start date can shift which real matches now fall inside
-    # the cycle's window — re-align immediately rather than leaving it on
-    # whatever target_match_date the old window had picked.
-    realign_season_to_matches(current_user.club_id, db)
-    db.refresh(db_cycle)
-
-    return TrainingCycleSchema.model_validate(result).model_copy(
-        update={"id": db_cycle.id, "target_match_date": db_cycle.target_match_date}
     )
 
 

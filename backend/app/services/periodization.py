@@ -244,36 +244,43 @@ def start_new_season(
     return season
 
 
-def edit_first_cycle_of_season(
+def edit_active_cycle(
     season: Season,
+    today: date,
     new_start_date: Optional[date] = None,
     new_length_weeks: Optional[int] = None,
     new_target_peak_weekly_km: Optional[float] = None,
 ) -> TrainingCycle:
-    """Corrigeert de EERSTE cyclus van een seizoen (startdatum en/of lengte)
-    — voor wanneer de coach zich vergist heeft. Enkel toegestaan zolang er
-    nog geen volgende cyclus is gestart (season.cycles telt precies 1): zodra
-    een tweede cyclus is aangesloten, zou een wijziging aan de eerste cyclus
-    alle latere startdata laten verschuiven en eventueel al gelogde
-    trainingsdata (MAS-testen, RPE, km per week) laten ontsporen — dit blijft
-    bewust beperkt tot de veilige, vroege situatie."""
-    if len(season.cycles) != 1:
+    """Corrigeert de ACTIEVE cyclus (startdatum en/of lengte en/of piekvolume)
+    — voor wanneer de coach zich vergist heeft bij het instellen ervan. Enkel
+    toegestaan zolang er nog geen volgende cyclus is klaargezet ná de
+    actieve (dus season.cycles[-1] is de actieve cyclus): zou er al een
+    volgende klaarstaan, dan zou een gewijzigde lengte/startdatum hier de
+    startdatum van die klaargezette cyclus laten ontsporen (die sluit altijd
+    aan op het einde van de vorige, zie add_cycle_to_season) en eventueel al
+    gelogde trainingsdata (MAS-testen, RPE, km per week) laten ontsporen —
+    dit blijft bewust beperkt tot de veilige situatie."""
+    active_cycle, _ = get_active_cycle_and_week(season, today)
+    if active_cycle is None:
+        raise ValueError("Geen actieve cyclus gevonden.")
+    if season.cycles[-1] is not active_cycle:
         raise ValueError(
-            "De eerste cyclus kan enkel nog gecorrigeerd worden zolang er geen "
-            "volgende cyclus is gestart — er staat al meer dan 1 cyclus in dit seizoen."
+            "Er staat al een volgende cyclus klaar — deze cyclus kan niet meer "
+            "aangepast worden zonder de startdatum van de klaargezette cyclus te laten ontsporen."
         )
-    old = season.cycles[0]
-    length_weeks = new_length_weeks or old.length_weeks
+
+    idx = season.cycles.index(active_cycle)
+    length_weeks = new_length_weeks or active_cycle.length_weeks
     if length_weeks not in CYCLE_TEMPLATES:
         raise ValueError(f"Ongeldige cycluslengte: {length_weeks} (kies 4, 6 of 8).")
 
     corrected = build_cycle(
-        name=old.name, length_weeks=length_weeks,
-        start_date=new_start_date or old.start_date,
-        target_match_date=old.target_match_date,
-        target_peak_weekly_km=new_target_peak_weekly_km or old.target_peak_weekly_km,
+        name=active_cycle.name, length_weeks=length_weeks,
+        start_date=new_start_date or active_cycle.start_date,
+        target_match_date=active_cycle.target_match_date,
+        target_peak_weekly_km=new_target_peak_weekly_km or active_cycle.target_peak_weekly_km,
     )
-    season.cycles[0] = corrected
+    season.cycles[idx] = corrected
     return corrected
 
 

@@ -102,28 +102,23 @@ class QueueNextCycleRequest(BaseModel):
 class CurrentCyclesResponse(BaseModel):
     active: Optional[TrainingCycleSchema] = None
     queued: Optional[TrainingCycleSchema] = None
-    # True iff the season has exactly one cycle so far (none started after
-    # it yet) — the frontend only shows the "Cyclus aanpassen" action while
-    # this holds, matching edit_first_cycle_of_season()'s own guard.
-    can_edit_first_cycle: bool = False
-
-
-class EditFirstCycleRequest(BaseModel):
-    start_date: Optional[date] = None
-    length_weeks: Optional[Literal[4, 6, 8]] = None
-    target_peak_weekly_km: Optional[float] = None
+    # True iff the active cycle is also the season's last cycle (nothing
+    # queued after it yet) — the frontend only allows editing start_date/
+    # length_weeks while this holds, matching edit_active_cycle()'s guard.
+    can_edit_active_cycle: bool = False
 
 
 class PatchActiveCycleRequest(BaseModel):
-    # Deliberately only the safe, non-destructive fields: length_weeks/
-    # start_date aren't editable here because the active cycle's weeks
-    # already have dates baked in and distance logs already reference them
-    # by training_cycle_id/week_number (see app/routers/matches.py) —
-    # changing either would need a full rebuild that could silently corrupt
-    # that history. Use POST /cycles to replace the active cycle outright
-    # if a structural change is really needed.
+    # name/target_peak_weekly_km are always safe, in-place edits.
+    # start_date/length_weeks are structural (rebuild every week via
+    # services.periodization.edit_active_cycle) and only accepted while
+    # can_edit_active_cycle holds — see that function's docstring for why.
+    # target_match_date is never client-settable anymore: it's derived
+    # automatically by align_cycle_to_nearest_match() whenever a match is
+    # added (see app/routers/matches.py).
     name: Optional[str] = None
-    target_match_date: Optional[date] = None
+    start_date: Optional[date] = None
+    length_weeks: Optional[Literal[4, 6, 8]] = None
     target_peak_weekly_km: Optional[float] = None
 
 

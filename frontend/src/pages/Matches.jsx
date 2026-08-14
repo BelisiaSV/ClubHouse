@@ -388,9 +388,13 @@ export default function Matches() {
                   </div>
                 ))}
                 {day.masEvents.length > 0 && (
-                  <div className="mt-1 text-[9px] font-semibold px-1 py-0.5 rounded bg-violet-500/20 text-violet-300 truncate">
+                  <button
+                    type="button"
+                    onClick={() => openMasModal(day.masEvents[0])}
+                    className="mt-1 w-full text-[9px] font-semibold px-1 py-0.5 rounded bg-violet-500/20 text-violet-300 truncate hover:bg-violet-500/30"
+                  >
                     MAS-test
-                  </div>
+                  </button>
                 )}
               </div>
             );

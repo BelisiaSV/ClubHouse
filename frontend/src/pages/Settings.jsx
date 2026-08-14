@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  editFirstCycle,
   getCurrentCycles,
   patchActiveCycle,
   queueNextCycle,
@@ -47,12 +46,17 @@ export default function Settings() {
   const [weekdaysSaved, setWeekdaysSaved] = useState(false);
 
   const [activeCycle, setActiveCycle] = useState(null);
-  const [activeCycleForm, setActiveCycleForm] = useState({ name: "", target_peak_weekly_km: "" });
+  const [activeCycleForm, setActiveCycleForm] = useState({
+    name: "",
+    target_peak_weekly_km: "",
+    start_date: "",
+    length_weeks: 4,
+  });
   const [savingActiveCycle, setSavingActiveCycle] = useState(false);
   const [activeCycleError, setActiveCycleError] = useState(null);
   const [activeCycleSaved, setActiveCycleSaved] = useState(false);
   const [cyclesLoading, setCyclesLoading] = useState(true);
-  const [canEditFirstCycle, setCanEditFirstCycle] = useState(false);
+  const [canEditActiveCycle, setCanEditActiveCycle] = useState(false);
   const [hasAnyCycle, setHasAnyCycle] = useState(true); // avoid a flash of the "start season" form while loading
 
   // "Seizoen starten" — only shown before any cycle exists at all. The
@@ -65,13 +69,6 @@ export default function Settings() {
   const [startingSeason, setStartingSeason] = useState(false);
   const [startSeasonError, setStartSeasonError] = useState(null);
 
-  // "Eerste cyclus aanpassen" — only shown while canEditFirstCycle holds
-  // (season has exactly 1 cycle so far), for correcting a mistake.
-  const [firstCycleForm, setFirstCycleForm] = useState({ start_date: "", length_weeks: 4 });
-  const [savingFirstCycle, setSavingFirstCycle] = useState(false);
-  const [firstCycleError, setFirstCycleError] = useState(null);
-  const [firstCycleSaved, setFirstCycleSaved] = useState(false);
-
   const [queuedCycleId, setQueuedCycleId] = useState(null);
   const [cycleName, setCycleName] = useState("");
   const [cycleLengthWeeks, setCycleLengthWeeks] = useState(4);
@@ -82,13 +79,17 @@ export default function Settings() {
   const loadCycles = async () => {
     setCyclesLoading(true);
     try {
-      const { active, queued, can_edit_first_cycle } = await getCurrentCycles();
+      const { active, queued, can_edit_active_cycle } = await getCurrentCycles();
       setActiveCycle(active);
-      setCanEditFirstCycle(can_edit_first_cycle);
-      setHasAnyCycle(Boolean(active || queued || can_edit_first_cycle));
+      setCanEditActiveCycle(can_edit_active_cycle);
+      setHasAnyCycle(Boolean(active || queued || can_edit_active_cycle));
       if (active) {
-        setActiveCycleForm({ name: active.name, target_peak_weekly_km: active.target_peak_weekly_km });
-        setFirstCycleForm({ start_date: active.start_date, length_weeks: active.length_weeks });
+        setActiveCycleForm({
+          name: active.name,
+          target_peak_weekly_km: active.target_peak_weekly_km,
+          start_date: active.start_date,
+          length_weeks: active.length_weeks,
+        });
       }
       if (queued) {
         setQueuedCycleId(queued.id);
@@ -124,25 +125,6 @@ export default function Settings() {
       setStartSeasonError(err.response?.data?.detail ?? err.message);
     } finally {
       setStartingSeason(false);
-    }
-  };
-
-  const handleSaveFirstCycle = async (e) => {
-    e.preventDefault();
-    setSavingFirstCycle(true);
-    setFirstCycleError(null);
-    setFirstCycleSaved(false);
-    try {
-      await editFirstCycle(club.id, {
-        start_date: firstCycleForm.start_date,
-        length_weeks: Number(firstCycleForm.length_weeks),
-      });
-      await loadCycles();
-      setFirstCycleSaved(true);
-    } catch (err) {
-      setFirstCycleError(err.response?.data?.detail ?? err.message);
-    } finally {
-      setSavingFirstCycle(false);
     }
   };
 
@@ -213,11 +195,26 @@ export default function Settings() {
     setActiveCycleError(null);
     setActiveCycleSaved(false);
     try {
-      const updated = await patchActiveCycle({
+      const payload = {
         name: activeCycleForm.name,
         target_peak_weekly_km: Number(activeCycleForm.target_peak_weekly_km),
-      });
+      };
+      // start_date/length_weeks trigger a structural rebuild of the cycle's
+      // weeks on the backend (see PATCH /cycles/active) — only send them
+      // when editing is actually allowed, matching canEditActiveCycle's
+      // disabled state on the fields below.
+      if (canEditActiveCycle) {
+        payload.start_date = activeCycleForm.start_date;
+        payload.length_weeks = Number(activeCycleForm.length_weeks);
+      }
+      const updated = await patchActiveCycle(payload);
       setActiveCycle(updated);
+      setActiveCycleForm({
+        name: updated.name,
+        target_peak_weekly_km: updated.target_peak_weekly_km,
+        start_date: updated.start_date,
+        length_weeks: updated.length_weeks,
+      });
       setActiveCycleSaved(true);
     } catch (err) {
       setActiveCycleError(err.response?.data?.detail ?? err.message);
@@ -416,10 +413,9 @@ export default function Settings() {
         <section>
           <h2 className="text-lg font-semibold text-white mb-1">Actieve cyclus</h2>
           <p className="text-sm text-gray-400 mb-4">
-            De lopende trainingscyclus kan op elk moment aangepast worden — lengte en startdatum
-            liggen vast omdat de weken er al op afgestemd zijn, maar naam en piekvolume zijn
-            altijd wijzigbaar. De doelwedstrijd wordt automatisch bepaald zodra er wedstrijden in
-            de kalender staan.
+            Naam en piekvolume zijn altijd wijzigbaar. Lengte en startdatum kan je aanpassen
+            zolang er nog geen volgende cyclus is klaargezet — daarna liggen ze vast omdat de
+            weken er al op afgestemd zijn.
           </p>
 
           {!activeCycle && (
@@ -452,14 +448,34 @@ export default function Settings() {
                   className={inputClass}
                 />
               </label>
-              <p className="text-xs text-gray-500">
-                {activeCycle.length_weeks} weken, gestart op {activeCycle.start_date}
-                {" · "}
-                Doelwedstrijd:{" "}
-                {activeCycle.target_match_date
-                  ? activeCycle.target_match_date
-                  : "nog niet bepaald (automatisch zodra er een wedstrijd in de kalender staat)"}
-              </p>
+              <label className={labelClass}>
+                Startdatum
+                <input
+                  type="date"
+                  disabled={!canEditActiveCycle}
+                  value={activeCycleForm.start_date}
+                  onChange={(e) => setActiveCycleForm((f) => ({ ...f, start_date: e.target.value }))}
+                  className={`${inputClass} disabled:opacity-50 disabled:cursor-not-allowed`}
+                />
+              </label>
+              <label className={labelClass}>
+                Lengte
+                <select
+                  disabled={!canEditActiveCycle}
+                  value={activeCycleForm.length_weeks}
+                  onChange={(e) => setActiveCycleForm((f) => ({ ...f, length_weeks: e.target.value }))}
+                  className={`${inputClass} disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                  <option value={4}>4 weken</option>
+                  <option value={6}>6 weken</option>
+                  <option value={8}>8 weken</option>
+                </select>
+              </label>
+              {!canEditActiveCycle && (
+                <p className="text-xs text-gray-500">
+                  Lengte en startdatum liggen vast omdat de volgende cyclus al klaarstaat.
+                </p>
+              )}
 
               {activeCycleError && <p className="text-red-400 text-sm">{activeCycleError}</p>}
               {activeCycleSaved && <p className="text-emerald-400 text-sm">Opgeslagen.</p>}
@@ -468,47 +484,6 @@ export default function Settings() {
                 {savingActiveCycle ? "Bezig…" : "Opslaan"}
               </button>
             </form>
-          )}
-
-          {canEditFirstCycle && (
-            <details className="mt-3">
-              <summary className="text-sm text-gray-400 cursor-pointer hover:text-gray-300">
-                Vergissing bij de start? Cyclus aanpassen
-              </summary>
-              <form onSubmit={handleSaveFirstCycle} className={`${cardClass} space-y-5 mt-3`}>
-                <p className="text-xs text-gray-500">
-                  Enkel mogelijk zolang er nog geen volgende cyclus is gestart.
-                </p>
-                <label className={labelClass}>
-                  Startdatum
-                  <input
-                    type="date"
-                    value={firstCycleForm.start_date}
-                    onChange={(e) => setFirstCycleForm((f) => ({ ...f, start_date: e.target.value }))}
-                    className={inputClass}
-                  />
-                </label>
-                <label className={labelClass}>
-                  Lengte
-                  <select
-                    value={firstCycleForm.length_weeks}
-                    onChange={(e) => setFirstCycleForm((f) => ({ ...f, length_weeks: e.target.value }))}
-                    className={inputClass}
-                  >
-                    <option value={4}>4 weken</option>
-                    <option value={6}>6 weken</option>
-                    <option value={8}>8 weken</option>
-                  </select>
-                </label>
-
-                {firstCycleError && <p className="text-red-400 text-sm">{firstCycleError}</p>}
-                {firstCycleSaved && <p className="text-emerald-400 text-sm">Opgeslagen.</p>}
-
-                <button type="submit" disabled={savingFirstCycle} className={primaryButtonClass}>
-                  {savingFirstCycle ? "Bezig…" : "Cyclus corrigeren"}
-                </button>
-              </form>
-            </details>
           )}
         </section>
       )}

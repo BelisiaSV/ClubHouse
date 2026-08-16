@@ -201,6 +201,41 @@ def populate_match_distance_for_week(match_appearances: list, week_number: int) 
     return logs
 
 
+def split_training_distance_across_squad(
+    team_total_distance_km: float,
+    players: list,
+    position_weights: Optional[dict] = None,
+) -> dict:
+    """
+    Verdeelt de team-totale trainingsafstand van een AFGERONDE sessie over
+    de spelersgroep — er is geen aanwezigheids- of GPS-registratie per
+    speler, dus dit is de best haalbare schatting: elke speler krijgt een
+    aandeel naar rato van zijn positiegewicht (dezelfde gewichten als
+    calculate_km_target_per_position, maar hier GENORMALISEERD zodat de
+    som van alle aandelen opnieuw exact het teamtotaal geeft — in plaats
+    van een absoluut km-doel per positie op te leveren).
+
+    players: lijst van dicts {'player_name': str, 'position': PlayerPosition | None}.
+    Een speler zonder gekende positie krijgt gewicht 1.0 (gemiddelde) in
+    plaats van overgeslagen te worden — geen positie is geen reden om
+    structureel 0 trainings-km toegewezen te krijgen.
+
+    Geeft {player_name: training_distance_km} terug.
+    """
+    if not players:
+        return {}
+    weights = position_weights or DEFAULT_POSITION_KM_WEIGHTS
+    player_weights = [weights.get(p.get("position"), 1.0) for p in players]
+    total_weight = sum(player_weights)
+    if total_weight <= 0:
+        share = team_total_distance_km / len(players)
+        return {p["player_name"]: round(share, 2) for p in players}
+    return {
+        p["player_name"]: round(team_total_distance_km * (w / total_weight), 2)
+        for p, w in zip(players, player_weights)
+    }
+
+
 # --- Week-km-overzicht per positie, per cyclusweek ------------------------
 # Voegt de kilometerplanning (generate_cycle_km_plan) en de positie-
 # gewichten hierboven samen tot ÉÉN overzicht: per week van de cyclus, per

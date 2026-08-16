@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.storage import USING_SUPABASE_STORAGE
@@ -29,6 +30,32 @@ if not logging.getLogger("clubhouse.email").handlers:
     logging.getLogger("clubhouse.email").addHandler(logging.StreamHandler())
 
 app = FastAPI(title="ClubHouse Football SaaS API", version="0.6.0")
+
+logger = logging.getLogger("clubhouse.errors")
+
+
+# An UNHANDLED exception's default 500 response is normally sent by
+# Starlette's ServerErrorMiddleware, which — because @app.exception_handler
+# for the base Exception class gets special-cased straight to that same
+# outermost middleware — sits OUTSIDE CORSMiddleware (added below) no matter
+# which of the two you use. That response never passes back through
+# CORSMiddleware, so it never gets Access-Control-* headers, and the browser
+# blocks it as a CORS failure — which axios can't tell apart from a dropped
+# connection, so it just reports "Network Error" with the real cause (and
+# any useful detail message) invisible. Registering this as ordinary HTTP
+# middleware INSTEAD, and doing so before CORSMiddleware is added (Starlette
+# wraps middleware in reverse add-order, so whatever's added first ends up
+# innermost, closer to the routes), catches the exception on the inside —
+# the resulting response then passes back out through CORSMiddleware like
+# any other, and gets real CORS headers plus a readable error.
+@app.middleware("http")
+async def catch_unhandled_exceptions(request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:
+        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+        return JSONResponse(status_code=500, content={"detail": "Er ging iets mis. Probeer het opnieuw."})
+
 
 # Comma-separated, e.g. "https://clubhouse.vercel.app,https://clubhouse-staging.vercel.app" —
 # defaults to just the local Vite dev server so nothing extra needs configuring locally.

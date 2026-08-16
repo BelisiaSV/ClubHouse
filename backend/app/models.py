@@ -99,6 +99,7 @@ class ModuleKey(str, PyEnum):
     KALENDER = "kalender"
     MAS_TEST = "mas_test"
     RETURN_TO_PLAY = "return_to_play"
+    RPE_WELLNESS = "rpe_wellness"
     VIDEO_ANALYSE = "video_analyse"
 
 

@@ -14,7 +14,7 @@ from app.services.platform_admin import ModuleKey
 from app.services.rpe_wellness import is_session_day
 
 router = APIRouter(
-    prefix="/api/rpe-wellness", tags=["rpe-wellness"], dependencies=[Depends(require_module(ModuleKey.SQUAD_OVERVIEW))]
+    prefix="/api/rpe-wellness", tags=["rpe-wellness"], dependencies=[Depends(require_module(ModuleKey.RPE_WELLNESS))]
 )
 
 

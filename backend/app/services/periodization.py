@@ -402,10 +402,27 @@ def _find_cutover_week(cycle: TrainingCycle, cancelled_date: date) -> int:
 
 
 def _align_realization_to_match(cycle: TrainingCycle) -> None:
+    """Wijst PRECIES één week REALIZATION toe — de week waarin
+    cycle.target_match_date valt. Elke ANDERE week die al REALIZATION was
+    (bv. de sjabloonpositie, of een eerder gekozen match-week) wordt
+    gedegradeerd naar INTENSIFICATION: er hoort maar één piekweek per
+    cyclus te zijn, nooit twee tegelijk (dat zou de tapering-curve — en de
+    aaneengesloten CYCLE_TEMPLATES-blokvolgorde — opnieuw laten
+    interleaven)."""
     if cycle.target_match_date is None:
         return
+    target_week = None
     for w in cycle.weeks:
         week_end = w.week_start_date + timedelta(days=6)
         if w.week_start_date <= cycle.target_match_date <= week_end:
+            target_week = w
+            break
+    if target_week is None:
+        return
+    for w in cycle.weeks:
+        if w is target_week:
             w.focus = WeekFocus.REALIZATION
             w.planned_load_pct = LOAD_PCT_BY_FOCUS[WeekFocus.REALIZATION]
+        elif w.focus == WeekFocus.REALIZATION:
+            w.focus = WeekFocus.INTENSIFICATION
+            w.planned_load_pct = LOAD_PCT_BY_FOCUS[WeekFocus.INTENSIFICATION]

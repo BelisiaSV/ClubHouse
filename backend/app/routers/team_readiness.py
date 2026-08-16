@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user, require_module
+from app.deps import get_current_user, is_module_enabled_for_club, require_module
 from app.models import Club
 from app.models import Match as DbMatch
 from app.models import MatchStatus as DbMatchStatus
@@ -62,7 +62,8 @@ def overview(current_user: User = Depends(get_current_user), db: Session = Depen
       services.rpe_wellness.is_session_day, same source the RPE/wellness
       day-gate uses) — looks up to 3 weeks ahead, which comfortably covers
       "later this week" or "next week's first training"."""
-    squad = load_squad_readiness(current_user.club_id, db)
+    rpe_module_active = is_module_enabled_for_club(current_user.club_id, ModuleKey.RPE_WELLNESS, db)
+    squad = load_squad_readiness(current_user.club_id, db, rpe_module_active=rpe_module_active)
     flagged_count = sum(1 for sr in squad if any(f.flag_type in ATTENTION_FLAG_TYPES for f in sr.flags))
 
     today = date.today()
@@ -103,9 +104,14 @@ def overview(current_user: User = Depends(get_current_user), db: Session = Depen
 
 
 @router.post("/flags", response_model=list[PlayerFlagSchema])
-def flags(payload: FlagPlayersRequest, current_user: User = Depends(get_current_user)):
+def flags(
+    payload: FlagPlayersRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rpe_module_active = is_module_enabled_for_club(current_user.club_id, ModuleKey.RPE_WELLNESS, db)
     players = [p.to_dataclass() for p in payload.players]
-    result = flag_players(players)
+    result = flag_players(players, rpe_module_active=rpe_module_active)
     return [PlayerFlagSchema.model_validate(f) for f in result]
 
 
@@ -122,20 +128,23 @@ def propose_training_auto(
     to assemble and send that data itself, the way POST .../propose-training
     (the pure, bring-your-own-data version) does.
 
-    Players with no wellness entries yet are left out of the readiness
-    calculation (there's no basis for a PlayerReadiness for them, same
-    'geen_data' reasoning as Squad Overview) — they just don't get an
-    individual load_adjustment_factor applied."""
+    Every active player gets a real readiness now (km-based at minimum, see
+    _readiness.py's docstring) — nobody is excluded from the calculation
+    just for having no wellness entries."""
     today = date.today()
     season, _ = load_season_from_db(current_user.club_id, db)
     _, active_week = get_active_cycle_and_week(season, today)
     if active_week is None:
         raise HTTPException(status_code=404, detail="Geen actieve cyclus/week gevonden.")
 
-    squad = load_squad_readiness(current_user.club_id, db)
-    players = [sr.readiness for sr in squad if sr.readiness is not None]
+    rpe_module_active = is_module_enabled_for_club(current_user.club_id, ModuleKey.RPE_WELLNESS, db)
+    squad = load_squad_readiness(current_user.club_id, db, rpe_module_active=rpe_module_active)
+    players = [sr.readiness for sr in squad]
 
-    proposal = propose_next_training(week=active_week, players=players, km_per_training=payload.km_per_training)
+    proposal = propose_next_training(
+        week=active_week, players=players, km_per_training=payload.km_per_training,
+        rpe_module_active=rpe_module_active,
+    )
 
     db_session = DbTrainingSession(
         club_id=current_user.club_id,
@@ -162,11 +171,12 @@ def propose_week(current_user: User = Depends(get_current_user), db: Session = D
     kan met de oefenvormen."""
     today = date.today()
     season, _ = load_season_from_db(current_user.club_id, db)
-    squad = load_squad_readiness(current_user.club_id, db)
-    players = [sr.readiness for sr in squad if sr.readiness is not None]
+    rpe_module_active = is_module_enabled_for_club(current_user.club_id, ModuleKey.RPE_WELLNESS, db)
+    squad = load_squad_readiness(current_user.club_id, db, rpe_module_active=rpe_module_active)
+    players = [sr.readiness for sr in squad]
 
     try:
-        proposals = propose_training_week(season, players, today)
+        proposals = propose_training_week(season, players, today, rpe_module_active=rpe_module_active)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -192,11 +202,13 @@ def propose_training(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    rpe_module_active = is_module_enabled_for_club(current_user.club_id, ModuleKey.RPE_WELLNESS, db)
     players = [p.to_dataclass() for p in payload.players]
     proposal = propose_next_training(
         week=payload.week.to_dataclass(),
         players=players,
         km_per_training=payload.km_per_training,
+        rpe_module_active=rpe_module_active,
     )
 
     # Persisted so the coach can act on this exact proposal in follow-up

@@ -4,8 +4,9 @@ from sqlalchemy.orm import Session
 from app.core.storage import store_club_logo
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import Club, User
+from app.models import Club, ClubModule, User
 from app.schemas import ClubOut, ClubUpdateRequest
+from app.services.platform_admin import CORE_MODULES
 
 router = APIRouter(prefix="/api/clubs", tags=["clubs"])
 
@@ -20,9 +21,20 @@ MAX_LOGO_SIZE_BYTES = 4 * 1024 * 1024  # 4 MB — stays under Vercel serverless 
 # on the current hosting without switching the upload off the request body entirely.
 
 
+def _to_club_out(club: Club, db: Session) -> ClubOut:
+    """Attaches enabled_modules — not a real Club column, computed the same
+    way app.deps.is_module_enabled_for_club checks it (club_modules rows
+    with enabled=True, plus CORE_MODULES unconditionally) — so the frontend
+    can hide module-gated UI proactively instead of only discovering a
+    module is off after a 403."""
+    enabled_rows = db.query(ClubModule).filter_by(club_id=club.id, enabled=True).all()
+    enabled_modules = {row.module_key.value for row in enabled_rows} | {m.value for m in CORE_MODULES}
+    return ClubOut.model_validate(club).model_copy(update={"enabled_modules": sorted(enabled_modules)})
+
+
 @router.get("/me", response_model=ClubOut)
 def get_my_club(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return db.get(Club, current_user.club_id)
+    return _to_club_out(db.get(Club, current_user.club_id), db)
 
 
 @router.patch("/me", response_model=ClubOut)
@@ -36,7 +48,7 @@ def update_my_club(
         setattr(club, field, value)
     db.commit()
     db.refresh(club)
-    return club
+    return _to_club_out(club, db)
 
 
 @router.post("/me/logo", response_model=ClubOut)
@@ -71,4 +83,4 @@ def upload_my_club_logo(
 
     db.commit()
     db.refresh(club)
-    return club
+    return _to_club_out(club, db)

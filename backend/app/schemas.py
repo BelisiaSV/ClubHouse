@@ -64,6 +64,12 @@ class ClubOut(BaseModel):
     # the only input app.services.rpe_wellness.is_session_day() has for
     # "training day" (see that module's docstring for why).
     training_weekdays: list[int] | None
+    # Module keys the frontend may show nav/UI for — mirrors backend
+    # enforcement (app.deps.require_module) but lets the frontend hide
+    # things proactively instead of only erroring after a click. Always
+    # includes CORE_MODULES regardless of club_modules rows. Computed in
+    # app/routers/clubs.py, not a real Club column.
+    enabled_modules: list[str] = []
 
     class Config:
         from_attributes = True
@@ -131,10 +137,12 @@ class PlayerOut(BaseModel):
 
 class SquadOverviewPlayerSchema(BaseModel):
     """One row of GET /api/players/squad-overview — a player plus their
-    readiness status derived from recent RpeWellnessData via
-    app.services.team_readiness.flag_players(). 'geen_data' (rather than
-    defaulting to 'fit') is deliberate: a player with no wellness entries
-    yet has no basis for a status, so we say so instead of implying one."""
+    readiness status. 'acwr' is the always-available km-based ACWR (see
+    app.services.team_readiness._acwr_km); 'acwr_rpe' is only populated
+    when the RPE_WELLNESS module is active AND this player has a recent
+    entry. 'geen_data' (rather than defaulting to 'fit') applies only when
+    there's truly no basis for either signal — a player with real km data
+    but no RPE entry gets a real km-based status, not 'geen_data'."""
 
     id: uuid.UUID
     first_name: str
@@ -143,6 +151,7 @@ class SquadOverviewPlayerSchema(BaseModel):
     position: PlayerPosition | None
     status: Literal["fit", "reductie", "overbelast", "geen_data"]
     acwr: float | None
+    acwr_rpe: float | None = None
     latest_rpe: int | None
     latest_wellness: float | None
     flags: list[str]
@@ -151,6 +160,9 @@ class SquadOverviewPlayerSchema(BaseModel):
     # Training's overload/poor_recovery/acwr_trending_up/injured tile, which
     # deliberately excludes underload) without re-deriving it from text.
     flag_types: list[str] = []
+    # Parallel to flags/flag_types: 'km' or 'rpe' per flag, so the UI can
+    # show which signal caused it.
+    flag_sources: list[str] = []
 
 
 class PlayerImportError(BaseModel):

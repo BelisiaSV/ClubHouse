@@ -51,6 +51,7 @@ class ModuleKey(str, Enum):
     KALENDER = "kalender"
     MAS_TEST = "mas_test"
     RETURN_TO_PLAY = "return_to_play"
+    RPE_WELLNESS = "rpe_wellness"             # optionele laag bovenop de km-gebaseerde fitheid
     VIDEO_ANALYSE = "video_analyse"          # betaalde add-on
 
 
@@ -99,6 +100,16 @@ MODULE_REGISTRY = {
     ModuleKey.RETURN_TO_PLAY: ModuleDefinition(
         key=ModuleKey.RETURN_TO_PLAY, label="Return-to-play",
         description="Gefaseerd terugkeerprogramma na blessure.",
+        in_base_package=True, is_core=False, is_addon=False,
+    ),
+    ModuleKey.RPE_WELLNESS: ModuleDefinition(
+        key=ModuleKey.RPE_WELLNESS, label="RPE & Wellness",
+        description=(
+            "Optionele extra laag bovenop de km-gebaseerde fitheidsbepaling: RPE na elke "
+            "sessie en dagelijkse wellness-vragen (slaap, vermoeidheid, spierpijn, stress, "
+            "humeur). Uitgeschakeld -> het platform toont de spelerstoestand puur op basis "
+            "van afgelegde kilometers, zonder dat de coach dit moet invullen."
+        ),
         in_base_package=True, is_core=False, is_addon=False,
     ),
     ModuleKey.VIDEO_ANALYSE: ModuleDefinition(

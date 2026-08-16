@@ -46,26 +46,44 @@ def generate_cycle_km_plan(
     avg_match_distance_km: float = DEFAULT_AVG_MATCH_DISTANCE_KM,
     min_recovery_km_per_training: float = 3.0,
 ) -> list:
+    """Trainings-km en wedstrijd-km worden VOLLEDIG ONTKOPPELD berekend, in
+    plaats van wedstrijd-km af te trekken van een krimpend weektotaal (dat
+    liet het trainingsvolume in een deloadweek-met-wedstrijd bijna tot 0 km
+    inzakken — de wedstrijd-km bleef onveranderd terwijl het weektotaal met
+    load_pct kromp, dus at de wedstrijd een steeds groter aandeel van een
+    steeds kleiner totaal op). Een wedstrijd 'deload' je niet: je speelt hem
+    nog steeds volledig, ongeacht de trainingsfase.
+
+    Rekenwijze:
+    1. Een trainings-piekvolume wordt EENMALIG afgeleid uit
+       cycle.target_peak_weekly_km (dat de coach instelt als 'totaal in de
+       piekweek, uitgaand van 1 wedstrijd die week') door er één gemiddelde
+       wedstrijdafstand van af te trekken.
+    2. Dat trainings-piekvolume wordt PER WEEK geschaald met
+       week.planned_load_pct — dit bepaalt de trainings-km, volledig los
+       van of er die week een wedstrijd is.
+    3. De wedstrijd-km wordt apart en ONGEWIJZIGD opgeteld, o.b.v. het
+       WERKELIJKE aantal wedstrijden die week (week.num_matches) — nooit
+       afgeleid van of afgetrokken van het trainingsdeel.
+    4. weekly_target_km = training_distance_km + match_distance_km (een SOM,
+       geen aftrekking meer)."""
+    training_peak_km = max(0.0, cycle.target_peak_weekly_km - avg_match_distance_km)
+
     plans = []
     for week in cycle.weeks:
-        weekly_target_km = round(cycle.target_peak_weekly_km * (week.planned_load_pct / 100), 2)
+        training_distance_km = round(training_peak_km * (week.planned_load_pct / 100), 2)
         match_distance_km = round(week.num_matches * avg_match_distance_km, 2)
-        training_distance_km = round(weekly_target_km - match_distance_km, 2)
+        weekly_target_km = round(training_distance_km + match_distance_km, 2)
 
         note = ""
-        if training_distance_km < 0:
-            training_distance_km = 0.0
-            note = (f"Wedstrijdcongestie ({week.num_matches} wedstrijden): "
-                    f"trainingsvolume ondergeschikt aan herstel.")
-
         if week.num_trainings > 0:
             km_per_training = round(training_distance_km / week.num_trainings, 2)
-            if 0 < km_per_training < min_recovery_km_per_training and not note:
+            if 0 < km_per_training < min_recovery_km_per_training:
                 km_per_training = min_recovery_km_per_training
                 note = f"Opgetrokken naar het minimum van {min_recovery_km_per_training} km."
         else:
             km_per_training = 0.0
-            note = note or "Geen trainingen gepland deze week."
+            note = "Geen trainingen gepland deze week."
 
         plans.append(WeeklyKmPlan(
             week_number=week.week_number, focus=week.focus, weekly_target_km=weekly_target_km,
@@ -181,6 +199,41 @@ def populate_match_distance_for_week(match_appearances: list, week_number: int) 
             match_distance_km=distance,
         ))
     return logs
+
+
+def split_training_distance_across_squad(
+    team_total_distance_km: float,
+    players: list,
+    position_weights: Optional[dict] = None,
+) -> dict:
+    """
+    Verdeelt de team-totale trainingsafstand van een AFGERONDE sessie over
+    de spelersgroep — er is geen aanwezigheids- of GPS-registratie per
+    speler, dus dit is de best haalbare schatting: elke speler krijgt een
+    aandeel naar rato van zijn positiegewicht (dezelfde gewichten als
+    calculate_km_target_per_position, maar hier GENORMALISEERD zodat de
+    som van alle aandelen opnieuw exact het teamtotaal geeft — in plaats
+    van een absoluut km-doel per positie op te leveren).
+
+    players: lijst van dicts {'player_name': str, 'position': PlayerPosition | None}.
+    Een speler zonder gekende positie krijgt gewicht 1.0 (gemiddelde) in
+    plaats van overgeslagen te worden — geen positie is geen reden om
+    structureel 0 trainings-km toegewezen te krijgen.
+
+    Geeft {player_name: training_distance_km} terug.
+    """
+    if not players:
+        return {}
+    weights = position_weights or DEFAULT_POSITION_KM_WEIGHTS
+    player_weights = [weights.get(p.get("position"), 1.0) for p in players]
+    total_weight = sum(player_weights)
+    if total_weight <= 0:
+        share = team_total_distance_km / len(players)
+        return {p["player_name"]: round(share, 2) for p in players}
+    return {
+        p["player_name"]: round(team_total_distance_km * (w / total_weight), 2)
+        for p, w in zip(players, player_weights)
+    }
 
 
 # --- Week-km-overzicht per positie, per cyclusweek ------------------------

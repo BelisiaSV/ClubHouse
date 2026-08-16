@@ -327,15 +327,22 @@ class GenerateForMatchResponse(BaseModel):
 # ---- team_readiness.py router ----
 class PlayerReadinessSchema(BaseModel):
     player_name: str
-    acute_load_7d: float = Field(ge=0)
-    chronic_load_28d: float = Field(ge=0)
-    sleep_quality: int = Field(ge=1, le=5)
-    fatigue_level: int = Field(ge=1, le=5)
-    muscle_soreness: int = Field(ge=1, le=5)
-    stress_level: int = Field(ge=1, le=5)
-    mood: int = Field(ge=1, le=5)
+    # Km-gebaseerde basislaag — altijd beschikbaar, geen RPE-invoer nodig.
+    acute_km_7d: float = Field(ge=0, default=0.0)
+    chronic_km_28d: float = Field(ge=0, default=0.0)
     injury_flag: bool = False
-    weekly_acute_load_history: list[float] = Field(default_factory=list)
+    weekly_acute_km_history: list[float] = Field(default_factory=list)
+
+    # RPE/wellness-laag — volledig optioneel, telt enkel mee als de
+    # RPE_WELLNESS-module actief is voor deze club (zie app.services.
+    # team_readiness's docstring).
+    acute_load_7d: Optional[float] = Field(default=None, ge=0)
+    chronic_load_28d: Optional[float] = Field(default=None, ge=0)
+    sleep_quality: Optional[int] = Field(default=None, ge=1, le=5)
+    fatigue_level: Optional[int] = Field(default=None, ge=1, le=5)
+    muscle_soreness: Optional[int] = Field(default=None, ge=1, le=5)
+    stress_level: Optional[int] = Field(default=None, ge=1, le=5)
+    mood: Optional[int] = Field(default=None, ge=1, le=5)
 
     def to_dataclass(self) -> PlayerReadiness:
         return PlayerReadiness(**self.model_dump())
@@ -348,6 +355,7 @@ class PlayerFlagSchema(BaseModel):
     flag_type: str
     detail: str
     recommendation: str
+    source: str = "km"
 
 
 class FlagPlayersRequest(BaseModel):
@@ -403,6 +411,7 @@ class TrainingProposalSchema(BaseModel):
     adjustment_note: str
     session_index: int = 1
     player_flags: list[PlayerFlagSchema]
+    distance_by_position: dict[PlayerPosition, float] = Field(default_factory=dict)
 
 
 # ---- volume_planning.py router ----

@@ -99,6 +99,7 @@ class ModuleKey(str, PyEnum):
     KALENDER = "kalender"
     MAS_TEST = "mas_test"
     RETURN_TO_PLAY = "return_to_play"
+    RPE_WELLNESS = "rpe_wellness"
     VIDEO_ANALYSE = "video_analyse"
 
 
@@ -449,6 +450,44 @@ class PlayerWeeklyDistanceLog(Base):
 
     __table_args__ = (
         UniqueConstraint("match_id", "player_id", name="player_weekly_distance_log_match_id_player_id_key"),
+    )
+
+
+class PlayerTrainingDistanceLog(Base):
+    """One row per (training_session, player): the player's estimated
+    training distance for a FINALIZED session, auto-populated at finalize
+    time (app/routers/training_sessions.py's finalize_session) by splitting
+    the session's team-total distance across the active squad using the
+    same position weights services.volume_planning.
+    calculate_km_target_per_position() uses for planning. There's no
+    per-session attendance or GPS tracking yet, so an even, position-
+    weighted split across the whole squad is the most defensible estimate
+    available — a known simplification, not a measurement.
+
+    Feeds acute_km_7d/chronic_km_28d in app/routers/_readiness.py alongside
+    player_weekly_distance_log's match distance; kept as a separate table
+    rather than added to player_weekly_distance_log because that table's
+    rows are keyed one-per-match (match_id NOT NULL, unique per
+    match+player) — training has no match to key against."""
+
+    __tablename__ = "player_training_distance_log"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    club_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("clubs.id", ondelete="CASCADE"), nullable=False)
+    player_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("players.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    training_session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("training_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    session_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    training_distance_km: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "training_session_id", "player_id", name="player_training_distance_log_session_id_player_id_key"
+        ),
     )
 
 

@@ -10,6 +10,7 @@ import {
   recordMasTest,
   recordRpeWellness,
 } from "../api/client";
+import { useAuth } from "../context/AuthContext.jsx";
 
 const EXTERNAL_LOAD_LABELS = {
   none: "Geen",
@@ -64,6 +65,8 @@ function initials(firstName, lastName) {
 }
 
 export default function Players() {
+  const { club } = useAuth();
+  const rpeModuleActive = Boolean(club?.enabled_modules?.includes("rpe_wellness"));
   const [searchParams, setSearchParams] = useSearchParams();
   const flaggedOnly = searchParams.get("filter") === "flagged";
 
@@ -122,10 +125,13 @@ export default function Players() {
         if (result.length > 0) setTestProtocolKey(result[0].key);
       })
       .catch(() => {});
-    getRpeWellnessShouldPrompt()
-      .then(setShouldPrompt)
-      .catch(() => {});
-  }, []);
+    if (rpeModuleActive) {
+      getRpeWellnessShouldPrompt()
+        .then(setShouldPrompt)
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rpeModuleActive]);
 
   const statusCounts = useMemo(() => {
     const counts = { fit: 0, reductie: 0, overbelast: 0, geen_data: 0 };
@@ -282,7 +288,8 @@ export default function Players() {
         <div>
           <h1 className="text-3xl font-bold text-white tracking-tight mb-1">Squad Overview</h1>
           <p className="text-sm text-gray-400">
-            Statusoverzicht per speler op basis van RPE en wellness-gegevens uit de voorbije 28 dagen.
+            Statusoverzicht per speler op basis van afgelegde kilometers uit de voorbije 28 dagen
+            {rpeModuleActive ? ", aangevuld met RPE en wellness-gegevens." : "."}
           </p>
         </div>
         <button
@@ -304,7 +311,7 @@ export default function Players() {
         </div>
       )}
 
-      {shouldPrompt?.is_session_day && (
+      {rpeModuleActive && shouldPrompt?.is_session_day && (
         <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 rounded-2xl px-5 py-3.5 mb-6 text-sm">
           Vandaag is een {shouldPrompt.reason === "match" ? "wedstrijddag" : "trainingsdag"} — vergeet niet RPE
           en wellness in te vullen bij de spelers die trainen of spelen.
@@ -489,14 +496,16 @@ export default function Players() {
 
                   <div className="text-xs text-gray-400 mb-3">
                     {p.status === "geen_data" ? (
-                      "Nog geen RPE/wellness-gegevens."
+                      "Nog geen belastingsgegevens."
                     ) : (
                       <>
-                        {p.acwr != null && <span>ACWR {p.acwr}</span>}
-                        {p.acwr != null && (p.latest_rpe != null || p.latest_wellness != null) && <span> · </span>}
-                        {p.latest_rpe != null && <span>RPE {p.latest_rpe}</span>}
-                        {p.latest_rpe != null && p.latest_wellness != null && <span> · </span>}
-                        {p.latest_wellness != null && <span>Wellness {p.latest_wellness}/5</span>}
+                        {p.acwr != null && <span>Km-ACWR {p.acwr}</span>}
+                        {rpeModuleActive && p.acwr != null && (p.latest_rpe != null || p.latest_wellness != null) && (
+                          <span> · </span>
+                        )}
+                        {rpeModuleActive && p.latest_rpe != null && <span>RPE {p.latest_rpe}</span>}
+                        {rpeModuleActive && p.latest_rpe != null && p.latest_wellness != null && <span> · </span>}
+                        {rpeModuleActive && p.latest_wellness != null && <span>Wellness {p.latest_wellness}/5</span>}
                       </>
                     )}
                     {p.flags.length > 0 && (
@@ -504,6 +513,9 @@ export default function Players() {
                         {p.flags.map((detail, i) => (
                           <li key={i} className="text-[11px] text-gray-500">
                             {detail}
+                            {rpeModuleActive && p.flag_sources?.[i] && (
+                              <span className="text-gray-600"> ({p.flag_sources[i]})</span>
+                            )}
                           </li>
                         ))}
                       </ul>
@@ -517,15 +529,17 @@ export default function Players() {
                     >
                       {isTestOpen ? "Sluiten" : "MAS-test invoeren"}
                     </button>
-                    <button
-                      onClick={() => (isRpeOpen ? setRpePlayerId(null) : openRpeForm(p.id))}
-                      className="text-brand hover:opacity-80 text-xs font-medium"
-                    >
-                      {isRpeOpen ? "Sluiten" : "RPE & wellness invullen"}
-                    </button>
+                    {rpeModuleActive && (
+                      <button
+                        onClick={() => (isRpeOpen ? setRpePlayerId(null) : openRpeForm(p.id))}
+                        className="text-brand hover:opacity-80 text-xs font-medium"
+                      >
+                        {isRpeOpen ? "Sluiten" : "RPE & wellness invullen"}
+                      </button>
+                    )}
                   </div>
 
-                  {isRpeOpen && (
+                  {rpeModuleActive && isRpeOpen && (
                     <form onSubmit={handleRecordRpeWellness} className="mt-3 pt-3 border-t border-white/10 space-y-2.5 text-sm">
                       <div className="grid grid-cols-2 gap-2.5">
                         <label className="flex flex-col text-gray-300 text-xs gap-1">

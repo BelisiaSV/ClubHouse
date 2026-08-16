@@ -2,12 +2,14 @@ import uuid
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user, require_module
 from app.models import Match as DbMatch
+from app.models import Player as DbPlayer
+from app.models import PlayerTrainingDistanceLog as DbPlayerTrainingDistanceLog
 from app.models import RpeWellnessData as DbRpeWellnessData
 from app.models import TrainingSession as DbTrainingSession
 from app.models import User
@@ -39,6 +41,8 @@ from app.services.session_composition import (
     summarize_composition,
 )
 from app.services.team_readiness import PlayerFlag
+from app.services.volume_planning import PlayerPosition as ServicePlayerPosition
+from app.services.volume_planning import split_training_distance_across_squad
 
 router = APIRouter(
     prefix="/api/training-sessions",
@@ -94,6 +98,55 @@ def _to_detail_schema(session: DbTrainingSession) -> TrainingSessionDetailSchema
 
 def _to_player_flags(flags: list[PlayerFlagSchema] | None) -> list[PlayerFlag] | None:
     return [PlayerFlag(**f.model_dump()) for f in flags] if flags else None
+
+
+def _sync_player_training_distance_log(session: DbTrainingSession, club_id: uuid.UUID, db: Session) -> None:
+    """Splits a just-finalized session's team-total distance across the
+    active squad (services.volume_planning.split_training_distance_across_squad)
+    and upserts one player_training_distance_log row per player — see that
+    table's docstring for why this is a position-weighted estimate rather
+    than real per-player attendance/GPS data. Delete-then-recreate rather
+    than a true upsert since finalize_session can in principle be called
+    again on the same session (re-finalizing), and the squad or blocks may
+    have changed since the first call."""
+    db.execute(
+        delete(DbPlayerTrainingDistanceLog).where(
+            DbPlayerTrainingDistanceLog.training_session_id == session.id
+        )
+    )
+    if session.session_date is None:
+        return
+
+    team_total_distance_km = round(sum(b.get("distance_km", 0) for b in (session.blocks or [])), 2)
+    if team_total_distance_km <= 0:
+        return
+
+    players = db.scalars(
+        select(DbPlayer).where(DbPlayer.club_id == club_id, DbPlayer.is_active.is_(True))
+    ).all()
+    if not players:
+        return
+
+    shares = split_training_distance_across_squad(
+        team_total_distance_km,
+        [
+            {
+                "player_name": p.id,
+                "position": ServicePlayerPosition(p.position.value) if p.position else None,
+            }
+            for p in players
+        ],
+    )
+    for player in players:
+        db.add(
+            DbPlayerTrainingDistanceLog(
+                club_id=club_id,
+                player_id=player.id,
+                training_session_id=session.id,
+                session_date=session.session_date,
+                training_distance_km=shares.get(player.id, 0.0),
+            )
+        )
 
 
 def _composition_proposal(
@@ -256,6 +309,8 @@ def finalize_session(
     session.blocks = [b.model_dump() for b in payload.blocks]
     session.skipped_vormen = payload.skip_vormen or []
     session.finalized_at = datetime.now(timezone.utc)
+    db.flush()
+    _sync_player_training_distance_log(session, current_user.club_id, db)
     db.commit()
     db.refresh(session)
     return _to_detail_schema(session)

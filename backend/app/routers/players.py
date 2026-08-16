@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user, require_module
+from app.deps import get_current_user, is_module_enabled_for_club, require_module
 from app.models import Player, PlayerWeeklyDistanceLog, User
 from app.models import TrainingCycle as DbTrainingCycle
 from app.routers._readiness import _normalized_wellness, load_squad_readiness
@@ -138,21 +138,28 @@ def list_players(current_user: User = Depends(get_current_user), db: Session = D
 @router.get("/squad-overview", response_model=list[SquadOverviewPlayerSchema])
 def squad_overview(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Per-player readiness status for the Squad Overview grid: classifies
-    each player as fit / reductie / overbelast from their last 28 days of
-    RpeWellnessData, reusing the exact flag_players() rules the Next
-    Training proposal uses (app.services.team_readiness) so the two stay
-    consistent. A player with no wellness entries yet gets 'geen_data'
-    rather than a guessed 'fit', since there's no basis for either.
+    each player as fit / reductie / overbelast, reusing the exact
+    flag_players() rules the Next Training proposal uses
+    (app.services.team_readiness) so the two stay consistent. Km-based
+    (acute/chronic distance) is the always-available basis; RPE/wellness
+    only adds to it when ModuleKey.RPE_WELLNESS is active for this club.
+    'geen_data' applies only when a player has neither real km data
+    (chronic_km_28d == 0) nor an RPE entry — not just for lacking one of
+    the two.
 
     flag_players() is keyed by player_name (not id) — an existing
     limitation of that service (two same-named players in one club would
     collide), not something introduced here."""
-    squad = load_squad_readiness(current_user.club_id, db)
+    rpe_module_active = is_module_enabled_for_club(current_user.club_id, ModuleKey.RPE_WELLNESS, db)
+    squad = load_squad_readiness(current_user.club_id, db, rpe_module_active=rpe_module_active)
 
     result = []
     for sr in squad:
         player = sr.player
-        if sr.readiness is None or sr.latest is None:
+        readiness = sr.readiness
+        latest = sr.latest
+
+        if readiness.chronic_km_28d <= 0 and latest is None:
             result.append(
                 SquadOverviewPlayerSchema(
                     id=player.id,
@@ -169,8 +176,6 @@ def squad_overview(current_user: User = Depends(get_current_user), db: Session =
             )
             continue
 
-        readiness = sr.readiness
-        latest = sr.latest
         flag_types = {f.flag_type for f in sr.flags}
         if "injured" in flag_types or "overload" in flag_types:
             status = "overbelast"
@@ -188,14 +193,22 @@ def squad_overview(current_user: User = Depends(get_current_user), db: Session =
                 position=player.position,
                 status=status,
                 acwr=(
-                    round(readiness.acute_load_7d / readiness.chronic_load_28d, 2)
-                    if readiness.chronic_load_28d > 0
+                    round(readiness.acute_km_7d / readiness.chronic_km_28d, 2)
+                    if readiness.chronic_km_28d > 0
                     else None
                 ),
-                latest_rpe=latest.rpe_score,
-                latest_wellness=_normalized_wellness(latest),
+                acwr_rpe=(
+                    round(readiness.acute_load_7d / readiness.chronic_load_28d, 2)
+                    if readiness.acute_load_7d is not None
+                    and readiness.chronic_load_28d is not None
+                    and readiness.chronic_load_28d > 0
+                    else None
+                ),
+                latest_rpe=latest.rpe_score if latest else None,
+                latest_wellness=_normalized_wellness(latest) if latest else None,
                 flags=[f.detail for f in sr.flags],
                 flag_types=[f.flag_type for f in sr.flags],
+                flag_sources=[f.source for f in sr.flags],
             )
         )
     return result

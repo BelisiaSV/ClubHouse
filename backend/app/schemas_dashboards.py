@@ -394,6 +394,25 @@ class NextTrainingOverviewSchema(BaseModel):
     next_session: Optional[NextSessionSchema] = None
 
 
+class PlayerMinutesAdviceSchema(BaseModel):
+    player_id: uuid.UUID
+    player_name: str
+    max_minutes: int
+    base_max_minutes: int
+    # Empty when no reduction applies (player isn't flagged as undertrained).
+    note: str = ""
+
+
+class MinutesAdviceResponse(BaseModel):
+    # False whenever the active cycle isn't the season-start cycle (see
+    # app.models.TrainingCycle.is_season_start) — the frontend hides the
+    # widget entirely in that case rather than showing an empty list.
+    applicable: bool
+    week_number: Optional[int] = None
+    cycle_length_weeks: Optional[int] = None
+    players: list[PlayerMinutesAdviceSchema] = Field(default_factory=list)
+
+
 class TrainingProposalSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

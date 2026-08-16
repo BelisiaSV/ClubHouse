@@ -1,15 +1,16 @@
 import uuid
-from datetime import timedelta
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user, require_module
+from app.deps import get_current_user, is_module_enabled_for_club, require_module
 from app.models import MasTest, Match, MatchMinutes, Player, PlayerWeeklyDistanceLog, User
 from app.models import TrainingCycle as DbTrainingCycle
 from app.models import TrainingCycleWeek as DbTrainingCycleWeek
+from app.schemas_dashboards import MinutesAdviceResponse, PlayerMinutesAdviceSchema
 from app.schemas_matches import (
     DEFAULT_MINUTES_BY_STATUS,
     MatchCreate,
@@ -17,7 +18,9 @@ from app.schemas_matches import (
     MatchPlayerRow,
     MatchPlayerUpdate,
 )
-from app.routers.periodization import realign_season_to_matches
+from app.routers._readiness import load_squad_readiness
+from app.routers.periodization import load_season_from_db, realign_season_to_matches
+from app.services.periodization import get_active_cycle_and_week, suggest_player_minutes_cap
 from app.services.platform_admin import ModuleKey
 from app.services.volume_planning import PlayerPosition as ServicePlayerPosition
 from app.services.volume_planning import populate_match_distance_for_week
@@ -110,6 +113,55 @@ def list_matches(current_user: User = Depends(get_current_user), db: Session = D
     return db.scalars(
         select(Match).where(Match.club_id == current_user.club_id).order_by(Match.match_date.desc())
     ).all()
+
+
+@router.get("/minutes-advice", response_model=MinutesAdviceResponse)
+def minutes_advice(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Speelminuten-opbouwadvies voor de eerstvolgende wedstrijd — ENKEL
+    wanneer de actieve cyclus de seizoensstart is (TrainingCycle.
+    is_season_start, dus season.cycles[0]): een speler die al maanden in
+    competitie speelt is niet ondertraind, ook al begint een latere cyclus
+    toevallig met een accumulatieweek. applicable=False in elk ander geval
+    — de widget op het Wedstrijden-tabblad toont zichzelf dan niet, in
+    plaats van een lege lijst te tonen.
+
+    Puur een AANBEVELING: suggest_player_minutes_cap() krijgt elke
+    speler's km-gebaseerde vlaggen (source == 'km') mee uit flag_players()
+    — niet de RPE-laag, die is voor iets anders (herstel/wellness, geen
+    trainingsachterstand-signaal). De coach kan bij het afronden van een
+    wedstrijd nog altijd om het even welke minuten ingeven; dit blokkeert
+    niets."""
+    today = date.today()
+    season, _ = load_season_from_db(current_user.club_id, db)
+    active_cycle, active_week = get_active_cycle_and_week(season, today)
+    if active_cycle is None or active_week is None or not active_cycle.is_season_start:
+        return MinutesAdviceResponse(applicable=False)
+
+    rpe_module_active = is_module_enabled_for_club(current_user.club_id, ModuleKey.RPE_WELLNESS, db)
+    squad = load_squad_readiness(current_user.club_id, db, rpe_module_active=rpe_module_active)
+
+    players = []
+    for sr in squad:
+        if sr.readiness.injury_flag:
+            continue
+        km_flag_types = [f.flag_type for f in sr.flags if f.source == "km"]
+        advice = suggest_player_minutes_cap(active_week.week_number, active_cycle.length_weeks, km_flag_types)
+        players.append(
+            PlayerMinutesAdviceSchema(
+                player_id=sr.player.id,
+                player_name=f"{sr.player.first_name} {sr.player.last_name}",
+                max_minutes=advice["max_minutes"],
+                base_max_minutes=advice["base_max_minutes"],
+                note=advice["note"],
+            )
+        )
+
+    return MinutesAdviceResponse(
+        applicable=True,
+        week_number=active_week.week_number,
+        cycle_length_weeks=active_cycle.length_weeks,
+        players=players,
+    )
 
 
 @router.post("", response_model=MatchOut, status_code=201)

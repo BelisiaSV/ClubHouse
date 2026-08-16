@@ -114,6 +114,8 @@ export const generateForMatch = (matchId) =>
     .post("/api/makeup-programs/generate-for-match", { match_id: matchId })
     .then((res) => res.data);
 
+export const getMinutesAdvice = () => client.get("/api/matches/minutes-advice").then((res) => res.data);
+
 // ---- Periodization: weekselector ----
 export const queueNextCycle = (payload) =>
   client.post("/api/periodization/cycles/queue-next", payload).then((res) => res.data);

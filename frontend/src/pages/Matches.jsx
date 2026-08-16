@@ -6,6 +6,7 @@ import {
   getCurrentCycles,
   getKmOverview,
   getMasTestProtocols,
+  getMinutesAdvice,
   listMatches,
   listPlayers,
   recordMasTestBatch,
@@ -98,6 +99,7 @@ export default function Matches() {
 
   const [cycles, setCycles] = useState({ active: null, queued: null });
   const [kmOverview, setKmOverview] = useState([]);
+  const [minutesAdvice, setMinutesAdvice] = useState(null);
 
   const [viewDate, setViewDate] = useState(() => new Date());
 
@@ -139,6 +141,9 @@ export default function Matches() {
       .catch(() => {});
     getMasTestProtocols()
       .then(setProtocols)
+      .catch(() => {});
+    getMinutesAdvice()
+      .then(setMinutesAdvice)
       .catch(() => {});
   }, []);
 
@@ -454,6 +459,36 @@ export default function Matches() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {minutesAdvice?.applicable && minutesAdvice.players.length > 0 && (
+        <div className="bg-gray-900/60 border border-white/10 rounded-2xl p-6 shadow-xl shadow-black/20">
+          <h2 className="text-white font-semibold mb-1">Speelminuten-advies — seizoensstart</h2>
+          <p className="text-sm text-gray-400 mb-3">
+            Aanbevolen maximum voor de eerstvolgende wedstrijd (week {minutesAdvice.week_number} van{" "}
+            {minutesAdvice.cycle_length_weeks}), zodat de kern niet meteen 90&apos; speelt na een
+            periode met weinig wedstrijdbelasting. Een richtlijn, geen beperking — bij het afronden
+            van een wedstrijd kan je nog altijd om het even welke minuten ingeven.
+          </p>
+          <ul className="divide-y divide-white/5">
+            {minutesAdvice.players.map((p) => (
+              <li key={p.player_id} className="py-2.5 flex items-center justify-between gap-3 text-sm">
+                <span className="text-gray-300">{p.player_name}</span>
+                <span
+                  className={`shrink-0 font-medium ${
+                    p.max_minutes < p.base_max_minutes ? "text-amber-400" : "text-white"
+                  }`}
+                  title={p.note || undefined}
+                >
+                  max {p.max_minutes}&apos;
+                  {p.max_minutes < p.base_max_minutes && (
+                    <span className="text-gray-500 font-normal"> (i.p.v. {p.base_max_minutes}&apos;)</span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

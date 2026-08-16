@@ -53,6 +53,13 @@ class TrainingCycle:
     target_peak_weekly_km: float = 23.0   # door coach bepaald piekvolume (100%-week)
     weeks: list = field(default_factory=list)   # list[CycleWeek]
     shift_count: int = 0
+    # True enkel voor de allereerste cyclus van een club (season.cycles[0],
+    # aangemaakt via start_new_season()) — nooit voor een latere klaargezette
+    # of aangepaste cyclus, ook al begint die toevallig met een accumulatie-
+    # week. Stuurt de speelminuten-opbouwadvies (suggest_player_minutes_cap
+    # hieronder): dat advies is voor een écht ondertrainde kern na een
+    # onderbreking, niet voor elke accumulatieweek van een lopend seizoen.
+    is_season_start: bool = False
 
     def end_date(self) -> date:
         return self.start_date + timedelta(weeks=self.length_weeks)
@@ -245,6 +252,7 @@ def start_new_season(
         season, length_weeks=length_weeks, target_match_date=target_match_date,
         target_peak_weekly_km=target_peak_weekly_km, name=f"{name} — Cyclus 1", start_date=start_date,
     )
+    season.cycles[0].is_season_start = True
     return season
 
 
@@ -283,6 +291,7 @@ def edit_active_cycle(
         target_match_date=active_cycle.target_match_date,
         target_peak_weekly_km=new_target_peak_weekly_km or active_cycle.target_peak_weekly_km,
     )
+    corrected.is_season_start = active_cycle.is_season_start
     season.cycles[idx] = corrected
     changed = [corrected]
 
@@ -426,3 +435,62 @@ def _align_realization_to_match(cycle: TrainingCycle) -> None:
         elif w.focus == WeekFocus.REALIZATION:
             w.focus = WeekFocus.INTENSIFICATION
             w.planned_load_pct = LOAD_PCT_BY_FOCUS[WeekFocus.INTENSIFICATION]
+
+
+# =============================================================
+# 6. SPEELMINUTEN-OPBOUW BIJ SEIZOENSSTART (squad-breed)
+# =============================================================
+# Generaliseert het return-to-play-principe naar de HELE KERN bij het
+# opstarten van de EERSTE cyclus van een seizoen: spelers mogen niet meteen
+# 90' spelen na een periode met weinig wedstrijdbelasting. Onderbouwing:
+# verminderde wedstrijdblootstelling in de voorgaande wedstrijden is een
+# sterkere voorspeller van hamstringblessures dan hoge belasting op zich —
+# de MISMATCH tussen lage recente belasting en plotse volledige inzet is
+# het risico, niet volume an sich. Vandaar een geleidelijke opbouw i.p.v.
+# week 1 al 90'.
+#
+# ENKEL van toepassing op season.cycles[0] (TrainingCycle.is_season_start)
+# — nooit op een willekeurige latere cyclus die toevallig met een
+# accumulatieweek begint, want een speler die al maanden in competitie
+# speelt is niet ondertraind. De aanroeper (router) is verantwoordelijk om
+# dit enkel te tonen/berekenen wanneer de actieve cyclus is_season_start
+# draagt.
+#
+# Twee ramps: de standaardversie (6-8 weken, geleidelijker) en een
+# compressere versie voor 4-weken-scenario's (agressievere, lineaire
+# opbouw — met extra voorzichtigheid voor ondertrainde spelers, zie
+# suggest_player_minutes_cap()).
+MINUTES_RAMP_STANDARD = {1: 45, 2: 45, 3: 60, 4: 75}     # week 5+ -> 90 (volledig)
+MINUTES_RAMP_COMPRESSED = {1: 45, 2: 60, 3: 75}          # week 4+ -> 90 (4-wekenscenario)
+
+UNDERTRAINED_MINUTES_REDUCTION = 0.75  # extra beperking voor gevlagde spelers
+
+
+def suggest_max_match_minutes(week_number: int, cycle_length_weeks: int) -> int:
+    """Squad-brede richtlijn voor maximale speelminuten, o.b.v. hoeveel
+    weken opbouw er al achter de rug zijn — geen vaste wet, een
+    instelbaar vertrekpunt voor de coach."""
+    ramp = MINUTES_RAMP_COMPRESSED if cycle_length_weeks <= 4 else MINUTES_RAMP_STANDARD
+    return ramp.get(week_number, 90)
+
+
+def suggest_player_minutes_cap(week_number: int, cycle_length_weeks: int, player_flag_types: list) -> dict:
+    """
+    Individuele verfijning van suggest_max_match_minutes(): spelers met
+    een gedetecteerde trainingsachterstand (km-gebaseerde 'underload' of
+    'acwr_trending_up'-vlag — zie team_readiness.flag_players()) krijgen
+    een extra beperkt maximum, in lijn met de bevinding dat verminderde
+    recente belasting het hamstringblessurerisico verhoogt bij plotse
+    volledige inzet.
+    """
+    base = suggest_max_match_minutes(week_number, cycle_length_weeks)
+    is_undertrained = any(ft in ("underload", "acwr_trending_up") for ft in player_flag_types)
+
+    if is_undertrained:
+        capped = min(base, round(base * UNDERTRAINED_MINUTES_REDUCTION))
+        note = (f"Trainingsachterstand gedetecteerd (km-onderbelasting) — extra beperkt tot {capped}' "
+                f"i.p.v. de gebruikelijke {base}' voor deze cyclusweek. Verminderde recente belasting "
+                f"verhoogt het hamstringblessurerisico bij plotse volledige inzet.")
+        return {"max_minutes": capped, "base_max_minutes": base, "note": note}
+
+    return {"max_minutes": base, "base_max_minutes": base, "note": ""}

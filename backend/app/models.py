@@ -390,6 +390,14 @@ class TrainingCycle(Base):
     target_peak_weekly_km: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False, server_default="23.00")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     shift_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # True only for the very first cycle of a club's history (created by
+    # POST /api/periodization/seasons, i.e. season.cycles[0]) — never for a
+    # later queued/edited cycle, even one that happens to start with an
+    # accumulation-focus week. Drives the squad-wide minutes-buildup advice
+    # (app/services/periodization.py's suggest_player_minutes_cap): that
+    # guidance is for genuinely undertrained squads coming off a break, not
+    # every accumulation week of an ongoing competitive season.
+    is_season_start: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
     weeks: Mapped[list["TrainingCycleWeek"]] = relationship(

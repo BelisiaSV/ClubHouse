@@ -60,6 +60,9 @@ class TrainingCycleSchema(BaseModel):
     target_peak_weekly_km: float = 23.0
     weeks: list[CycleWeekSchema] = Field(default_factory=list)
     shift_count: int = 0
+    # True only for the club's very first cycle ever (season.cycles[0]) —
+    # see app.models.TrainingCycle.is_season_start's docstring.
+    is_season_start: bool = False
 
     def to_dataclass(self) -> TrainingCycle:
         return TrainingCycle(
@@ -70,6 +73,7 @@ class TrainingCycleSchema(BaseModel):
             target_peak_weekly_km=self.target_peak_weekly_km,
             weeks=[w.to_dataclass() for w in self.weeks],
             shift_count=self.shift_count,
+            is_season_start=self.is_season_start,
         )
 
 
@@ -388,6 +392,25 @@ class NextTrainingOverviewSchema(BaseModel):
     sessions_this_week: int
     week_focus: Optional[WeekFocus] = None
     next_session: Optional[NextSessionSchema] = None
+
+
+class PlayerMinutesAdviceSchema(BaseModel):
+    player_id: uuid.UUID
+    player_name: str
+    max_minutes: int
+    base_max_minutes: int
+    # Empty when no reduction applies (player isn't flagged as undertrained).
+    note: str = ""
+
+
+class MinutesAdviceResponse(BaseModel):
+    # False whenever the active cycle isn't the season-start cycle (see
+    # app.models.TrainingCycle.is_season_start) — the frontend hides the
+    # widget entirely in that case rather than showing an empty list.
+    applicable: bool
+    week_number: Optional[int] = None
+    cycle_length_weeks: Optional[int] = None
+    players: list[PlayerMinutesAdviceSchema] = Field(default_factory=list)
 
 
 class TrainingProposalSchema(BaseModel):

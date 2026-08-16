@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  deleteSession,
   finalizeSession,
   getCompositionProposal,
   getNextTrainingOverview,
@@ -129,6 +130,15 @@ function SessionProposalCard({ proposal, numPlayers, vormenLibrary, defaultSessi
     }
   };
 
+  const handleRemoveBlock = async (index) => {
+    const block = composition.blocks[index];
+    const newBlocks = composition.blocks.filter((_, i) => i !== index);
+    const nextSkip = new Set(skipVormen);
+    nextSkip.delete(block.vorm); // gone entirely now, no longer just skipped
+    setSkipVormen(nextSkip);
+    await recalc(newBlocks, nextSkip);
+  };
+
   const handleAddBlock = async () => {
     const vormMeta = vormenByKey[addVorm];
     if (!vormMeta) return;
@@ -218,14 +228,21 @@ function SessionProposalCard({ proposal, numPlayers, vormenLibrary, defaultSessi
                         Herhalingen (bouts) / duur — 0 = overslaan
                       </th>
                       <th className="px-3 py-2 font-medium">Afstand</th>
+                      <th className="px-3 py-2 font-medium"></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {composition.blocks.map((b, i) => {
+                    {composition.blocks.map((b, i, arr) => {
                       const skipped = skipVormen.has(b.vorm);
                       const isBout = vormenByKey[b.vorm]?.is_bout_vorm;
+                      // Keyed by vorm + occurrence rather than array index: index-based
+                      // keys made an uncontrolled reps <input> (defaultValue) keep a
+                      // STALE value from whatever used to sit at that index whenever a
+                      // block before it was removed — React reused the DOM node for a
+                      // completely different block instead of remounting it.
+                      const occurrence = arr.slice(0, i).filter((x) => x.vorm === b.vorm).length;
                       return (
-                        <tr key={i} className={`border-b border-white/5 last:border-b-0 ${skipped ? "opacity-40" : ""}`}>
+                        <tr key={`${b.vorm}__${occurrence}`} className={`border-b border-white/5 last:border-b-0 ${skipped ? "opacity-40" : ""}`}>
                           <td className="px-3 py-2 font-medium text-white">{b.label}</td>
                           <td className="px-3 py-2 text-xs text-gray-400">{b.format_hint || "—"}</td>
                           <td className="px-3 py-2">
@@ -244,6 +261,16 @@ function SessionProposalCard({ proposal, numPlayers, vormenLibrary, defaultSessi
                             <p className="text-[11px] text-gray-500 mt-0.5">{repsLabel(b, vormenByKey)}</p>
                           </td>
                           <td className="px-3 py-2">{b.distance_km} km</td>
+                          <td className="px-3 py-2">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveBlock(i)}
+                              title="Blok volledig verwijderen"
+                              className="text-gray-500 hover:text-red-400 text-xs px-1.5 py-1 rounded hover:bg-white/5"
+                            >
+                              ✕
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
@@ -339,6 +366,7 @@ export default function NextTraining() {
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   const [numPlayers, setNumPlayers] = useState("");
   const [vormenLibrary, setVormenLibrary] = useState([]);
@@ -420,6 +448,21 @@ export default function NextTraining() {
     setDetailId(null);
     setDetail(null);
     setDetailError(null);
+  };
+
+  const handleDeleteSession = async (id, e) => {
+    e?.stopPropagation();
+    if (!window.confirm("Deze sessie definitief verwijderen?")) return;
+    setDeletingId(id);
+    try {
+      await deleteSession(id);
+      if (detailId === id) closeDetail();
+      loadRecent();
+    } catch (err) {
+      setRecentError(err.response?.data?.detail ?? err.message);
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const tiles = useMemo(() => {
@@ -575,6 +618,7 @@ export default function NextTraining() {
                   <th className="px-4 py-3 font-medium">Datum</th>
                   <th className="px-4 py-3 font-medium">Belasting</th>
                   <th className="px-4 py-3 font-medium">RPE</th>
+                  <th className="px-4 py-3 font-medium"></th>
                 </tr>
               </thead>
               <tbody>
@@ -589,6 +633,17 @@ export default function NextTraining() {
                     <td className="px-4 py-3 text-gray-400">{fmtDate(s.session_date)}</td>
                     <td className="px-4 py-3">{s.total_distance_km} km</td>
                     <td className="px-4 py-3">{s.team_avg_rpe != null ? s.team_avg_rpe : "—"}</td>
+                    <td className="px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteSession(s.id, e)}
+                        disabled={deletingId === s.id}
+                        title="Sessie verwijderen"
+                        className="text-gray-500 hover:text-red-400 text-xs px-1.5 py-1 rounded hover:bg-white/5 disabled:opacity-50"
+                      >
+                        {deletingId === s.id ? "…" : "✕"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -650,6 +705,15 @@ export default function NextTraining() {
                     Overgeslagen (0'): {detail.skipped_vormen.join(", ")}
                   </div>
                 )}
+
+                <button
+                  type="button"
+                  onClick={(e) => handleDeleteSession(detailId, e)}
+                  disabled={deletingId === detailId}
+                  className="text-red-400 hover:text-red-300 text-xs pt-2 border-t border-white/10 w-full text-left disabled:opacity-50"
+                >
+                  {deletingId === detailId ? "Bezig met verwijderen…" : "Sessie verwijderen"}
+                </button>
               </>
             )}
           </div>

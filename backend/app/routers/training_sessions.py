@@ -325,6 +325,22 @@ def get_session_detail(
     return _to_detail_schema(session)
 
 
+@router.delete("/{session_id}", status_code=204)
+def delete_session(
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Verwijdert een sessie volledig — zowel een afgeronde ('Recente
+    sessies') als een nog niet-gefinaliseerde voorstel-rij. Niets anders
+    verwijst naar training_sessions.id via een foreign key (RPE/wellness
+    koppelt enkel los op datum, zie recent_sessions hierboven), dus dit is
+    een simpele, veilige delete zonder cascaderende gevolgen elders."""
+    session = _get_session_or_404(session_id, current_user, db)
+    db.delete(session)
+    db.commit()
+
+
 @router.post("/dry-run-topup", response_model=DryRunTopUpSchema)
 def dry_run_topup(payload: DryRunTopupRequest, current_user: User = Depends(get_current_user)):
     """Los endpoint (niet aan een session_id gekoppeld — propose_optional_

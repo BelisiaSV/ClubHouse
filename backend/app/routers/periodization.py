@@ -364,8 +364,7 @@ def get_current_cycles(
                 update={"id": cycle_db_ids[-1]}
             )
 
-    can_edit_active_cycle = bool(active_cycle is not None and season.cycles[-1] is active_cycle)
-    return CurrentCyclesResponse(active=active_schema, queued=queued_schema, can_edit_active_cycle=can_edit_active_cycle)
+    return CurrentCyclesResponse(active=active_schema, queued=queued_schema, can_edit_active_cycle=active_cycle is not None)
 
 
 @router.patch("/cycles/active", response_model=TrainingCycleSchema)
@@ -377,8 +376,9 @@ def patch_active_cycle(
     """Past de lopende, actieve cyclus aan. Naam en piekvolume zijn altijd
     veilig aan te passen in-place. start_date/length_weeks zijn structureel
     (herbouwen de weken volledig, via services.periodization.
-    edit_active_cycle) en enkel toegestaan zolang er nog geen volgende
-    cyclus is klaargezet — zie dat functiedoc voor waarom."""
+    edit_active_cycle) — en schuiven elke reeds klaargezette cyclus ná de
+    actieve automatisch mee, in plaats van de wijziging te blokkeren; zie
+    dat functiedoc voor waarom dat veilig is."""
     today = date.today()
     season, cycle_db_ids = load_season_from_db(current_user.club_id, db)
     active_cycle, _ = get_active_cycle_and_week(season, today)
@@ -391,7 +391,7 @@ def patch_active_cycle(
 
     if "start_date" in updates or "length_weeks" in updates:
         try:
-            result = svc_edit_active_cycle(
+            changed_cycles = svc_edit_active_cycle(
                 season, today,
                 new_start_date=updates.get("start_date"),
                 new_length_weeks=updates.get("length_weeks"),
@@ -399,32 +399,37 @@ def patch_active_cycle(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        result = changed_cycles[0]
         if "name" in updates:
             result.name = updates["name"]
 
-        db_cycle.name = result.name
-        db_cycle.length_type = _LENGTH_WEEKS_TO_DB[result.length_weeks]
-        db_cycle.start_date = result.start_date
-        db_cycle.end_date = result.end_date()
-        db_cycle.target_peak_weekly_km = result.target_peak_weekly_km
-        db.execute(delete(DbTrainingCycleWeek).where(DbTrainingCycleWeek.training_cycle_id == db_cycle.id))
-        db.flush()
-        for week in result.weeks:
-            db.add(
-                DbTrainingCycleWeek(
-                    training_cycle_id=db_cycle.id,
-                    week_number=week.week_number,
-                    week_start_date=week.week_start_date,
-                    focus=DbWeekFocus(week.focus.value),
-                    planned_load_pct=week.planned_load_pct,
+        for offset, changed in enumerate(changed_cycles):
+            target_db_id = cycle_db_ids[idx + offset]
+            target_db_cycle = db.get(DbTrainingCycle, target_db_id)
+            target_db_cycle.name = changed.name
+            target_db_cycle.length_type = _LENGTH_WEEKS_TO_DB[changed.length_weeks]
+            target_db_cycle.start_date = changed.start_date
+            target_db_cycle.end_date = changed.end_date()
+            target_db_cycle.target_peak_weekly_km = changed.target_peak_weekly_km
+            db.execute(delete(DbTrainingCycleWeek).where(DbTrainingCycleWeek.training_cycle_id == target_db_id))
+            db.flush()
+            for week in changed.weeks:
+                db.add(
+                    DbTrainingCycleWeek(
+                        training_cycle_id=target_db_id,
+                        week_number=week.week_number,
+                        week_start_date=week.week_start_date,
+                        focus=DbWeekFocus(week.focus.value),
+                        planned_load_pct=week.planned_load_pct,
+                    )
                 )
-            )
         db.commit()
         db.refresh(db_cycle)
 
         # A corrected start date/length can shift which real matches now
-        # fall inside the cycle's window — re-align immediately rather
-        # than leaving target_match_date on whatever the old window picked.
+        # fall inside the cycle's (or a cascaded cycle's) window — re-align
+        # immediately rather than leaving target_match_date on whatever the
+        # old window picked.
         realign_season_to_matches(current_user.club_id, db)
         db.refresh(db_cycle)
         active_cycle = result

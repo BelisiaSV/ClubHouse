@@ -81,8 +81,12 @@ CYCLE_TEMPLATES = {
         WeekFocus.REALIZATION, WeekFocus.DELOAD],
     6: [WeekFocus.ACCUMULATION, WeekFocus.ACCUMULATION, WeekFocus.INTENSIFICATION,
         WeekFocus.INTENSIFICATION, WeekFocus.REALIZATION, WeekFocus.DELOAD],
+    # 8 weken: middencyclus-hersteldip (RECOVERY, week 4) vóór de tweede
+    # opbouw — voorkomt dat vermoeidheid zich 7 weken lang opstapelt vóór
+    # de eerste rust, en geeft de tweede intensificatie/realisatie-fase
+    # een frissere basis om op te bouwen.
     8: [WeekFocus.ACCUMULATION, WeekFocus.ACCUMULATION, WeekFocus.INTENSIFICATION,
-        WeekFocus.INTENSIFICATION, WeekFocus.INTENSIFICATION, WeekFocus.REALIZATION,
+        WeekFocus.RECOVERY, WeekFocus.INTENSIFICATION, WeekFocus.REALIZATION,
         WeekFocus.REALIZATION, WeekFocus.DELOAD],
 }
 
@@ -304,6 +308,19 @@ def align_cycle_to_nearest_match(cycle: TrainingCycle, match_dates: list) -> Opt
     gewijzigd in de kalender (zie app/routers/matches.py) — geen eenmalige,
     statische instelling.
 
+    Herstelt EERST de zuivere CYCLE_TEMPLATES-volgorde voor elke week (enkel
+    veilig op een structureel ongewijzigde cyclus, shift_count == 0 — een
+    cyclus die al door handle_match_cancellation() herschikt is, telt niet
+    meer 1-op-1 met het sjabloon en wordt hier met rust gelaten) vóór de
+    nieuw gekozen week als REALIZATION gemarkeerd wordt. Zonder deze reset
+    blijft een EERDER gekozen week voor altijd op REALIZATION staan telkens
+    de 'dichtstbijzijnde wedstrijd' verschuift naar een andere week (bv. na
+    het toevoegen/verplaatsen van een wedstrijd) — build_cycle()/
+    CYCLE_TEMPLATES's contiguë fasevolgorde raakt dan zichtbaar door elkaar
+    (bv. Intensificatie → Realisatie → Intensificatie → Realisatie i.p.v.
+    aaneengesloten blokken), ook al is CYCLE_TEMPLATES zelf altijd correct
+    gebleven.
+
     Geeft de gekozen datum terug, of None als er geen enkele wedstrijd binnen
     een redelijk venster van de cyclus valt (dan blijft de realisatieweek op
     de sjabloonpositie staan)."""
@@ -314,6 +331,14 @@ def align_cycle_to_nearest_match(cycle: TrainingCycle, match_dates: list) -> Opt
         return None
     chosen = min(candidates, key=lambda d: abs((d - cycle.end_date()).days))
     cycle.target_match_date = chosen
+
+    if cycle.shift_count == 0:
+        template = CYCLE_TEMPLATES.get(cycle.length_weeks)
+        if template is not None and len(template) == len(cycle.weeks):
+            for week, focus in zip(cycle.weeks, template):
+                week.focus = focus
+                week.planned_load_pct = LOAD_PCT_BY_FOCUS[focus]
+
     _align_realization_to_match(cycle)
     return chosen
 
@@ -377,10 +402,27 @@ def _find_cutover_week(cycle: TrainingCycle, cancelled_date: date) -> int:
 
 
 def _align_realization_to_match(cycle: TrainingCycle) -> None:
+    """Wijst PRECIES één week REALIZATION toe — de week waarin
+    cycle.target_match_date valt. Elke ANDERE week die al REALIZATION was
+    (bv. de sjabloonpositie, of een eerder gekozen match-week) wordt
+    gedegradeerd naar INTENSIFICATION: er hoort maar één piekweek per
+    cyclus te zijn, nooit twee tegelijk (dat zou de tapering-curve — en de
+    aaneengesloten CYCLE_TEMPLATES-blokvolgorde — opnieuw laten
+    interleaven)."""
     if cycle.target_match_date is None:
         return
+    target_week = None
     for w in cycle.weeks:
         week_end = w.week_start_date + timedelta(days=6)
         if w.week_start_date <= cycle.target_match_date <= week_end:
+            target_week = w
+            break
+    if target_week is None:
+        return
+    for w in cycle.weeks:
+        if w is target_week:
             w.focus = WeekFocus.REALIZATION
             w.planned_load_pct = LOAD_PCT_BY_FOCUS[WeekFocus.REALIZATION]
+        elif w.focus == WeekFocus.REALIZATION:
+            w.focus = WeekFocus.INTENSIFICATION
+            w.planned_load_pct = LOAD_PCT_BY_FOCUS[WeekFocus.INTENSIFICATION]

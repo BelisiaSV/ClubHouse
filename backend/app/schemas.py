@@ -131,10 +131,12 @@ class PlayerOut(BaseModel):
 
 class SquadOverviewPlayerSchema(BaseModel):
     """One row of GET /api/players/squad-overview — a player plus their
-    readiness status derived from recent RpeWellnessData via
-    app.services.team_readiness.flag_players(). 'geen_data' (rather than
-    defaulting to 'fit') is deliberate: a player with no wellness entries
-    yet has no basis for a status, so we say so instead of implying one."""
+    readiness status. 'acwr' is the always-available km-based ACWR (see
+    app.services.team_readiness._acwr_km); 'acwr_rpe' is only populated
+    when the RPE_WELLNESS module is active AND this player has a recent
+    entry. 'geen_data' (rather than defaulting to 'fit') applies only when
+    there's truly no basis for either signal — a player with real km data
+    but no RPE entry gets a real km-based status, not 'geen_data'."""
 
     id: uuid.UUID
     first_name: str
@@ -143,6 +145,7 @@ class SquadOverviewPlayerSchema(BaseModel):
     position: PlayerPosition | None
     status: Literal["fit", "reductie", "overbelast", "geen_data"]
     acwr: float | None
+    acwr_rpe: float | None = None
     latest_rpe: int | None
     latest_wellness: float | None
     flags: list[str]

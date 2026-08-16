@@ -208,6 +208,7 @@ def squad_overview(current_user: User = Depends(get_current_user), db: Session =
                 latest_wellness=_normalized_wellness(latest) if latest else None,
                 flags=[f.detail for f in sr.flags],
                 flag_types=[f.flag_type for f in sr.flags],
+                flag_sources=[f.source for f in sr.flags],
             )
         )
     return result

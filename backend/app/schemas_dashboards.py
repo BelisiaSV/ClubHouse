@@ -60,6 +60,9 @@ class TrainingCycleSchema(BaseModel):
     target_peak_weekly_km: float = 23.0
     weeks: list[CycleWeekSchema] = Field(default_factory=list)
     shift_count: int = 0
+    # True only for the club's very first cycle ever (season.cycles[0]) —
+    # see app.models.TrainingCycle.is_season_start's docstring.
+    is_season_start: bool = False
 
     def to_dataclass(self) -> TrainingCycle:
         return TrainingCycle(
@@ -70,6 +73,7 @@ class TrainingCycleSchema(BaseModel):
             target_peak_weekly_km=self.target_peak_weekly_km,
             weeks=[w.to_dataclass() for w in self.weeks],
             shift_count=self.shift_count,
+            is_season_start=self.is_season_start,
         )
 
 

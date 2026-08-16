@@ -115,6 +115,7 @@ def _load_cycle_from_db(db_cycle: DbTrainingCycle, club: Club, db: Session) -> S
         target_peak_weekly_km=float(db_cycle.target_peak_weekly_km),
         weeks=weeks,
         shift_count=db_cycle.shift_count,
+        is_season_start=db_cycle.is_season_start,
     )
 
 
@@ -193,6 +194,7 @@ def _persist_as_active_cycle(cycle, club_id, db: Session) -> DbTrainingCycle:
         target_peak_weekly_km=cycle.target_peak_weekly_km,
         is_active=True,
         shift_count=cycle.shift_count,
+        is_season_start=cycle.is_season_start,
     )
     db.add(db_cycle)
     db.flush()

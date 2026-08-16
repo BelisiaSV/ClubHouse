@@ -198,4 +198,6 @@ export const getRecentSessions = (limit) =>
 export const getSessionDetail = (sessionId) =>
   client.get(`/api/training-sessions/${sessionId}`).then((res) => res.data);
 
+export const deleteSession = (sessionId) => client.delete(`/api/training-sessions/${sessionId}`);
+
 export default client;

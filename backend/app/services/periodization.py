@@ -250,24 +250,23 @@ def edit_active_cycle(
     new_start_date: Optional[date] = None,
     new_length_weeks: Optional[int] = None,
     new_target_peak_weekly_km: Optional[float] = None,
-) -> TrainingCycle:
+) -> list[TrainingCycle]:
     """Corrigeert de ACTIEVE cyclus (startdatum en/of lengte en/of piekvolume)
-    — voor wanneer de coach zich vergist heeft bij het instellen ervan. Enkel
-    toegestaan zolang er nog geen volgende cyclus is klaargezet ná de
-    actieve (dus season.cycles[-1] is de actieve cyclus): zou er al een
-    volgende klaarstaan, dan zou een gewijzigde lengte/startdatum hier de
-    startdatum van die klaargezette cyclus laten ontsporen (die sluit altijd
-    aan op het einde van de vorige, zie add_cycle_to_season) en eventueel al
-    gelogde trainingsdata (MAS-testen, RPE, km per week) laten ontsporen —
-    dit blijft bewust beperkt tot de veilige situatie."""
+    — voor wanneer de coach zich vergist heeft bij het instellen ervan, of
+    gewoon een andere startdatum wil. Elke cyclus die al ná de actieve
+    klaargezet stond, schuift automatisch mee (elk sluit weer naadloos aan op
+    het einde van de vorige, net als add_cycle_to_season dat bij het eerst
+    aanmaken doet) in plaats van de wijziging te blokkeren zodra er al een
+    volgende cyclus bestaat — die klaargezette cyclus is per definitie nog
+    niet gestart, dus er is nooit al trainingsdata (MAS-testen, RPE, km) op
+    haar datums gelogd die zou ontsporen.
+
+    Geeft de aangepaste cycli terug in seizoensvolgorde, te beginnen bij de
+    actieve cyclus zelf gevolgd door elke cascaded-herbouwde cyclus erna —
+    de aanroeper (router) moet ze allemaal persisteren."""
     active_cycle, _ = get_active_cycle_and_week(season, today)
     if active_cycle is None:
         raise ValueError("Geen actieve cyclus gevonden.")
-    if season.cycles[-1] is not active_cycle:
-        raise ValueError(
-            "Er staat al een volgende cyclus klaar — deze cyclus kan niet meer "
-            "aangepast worden zonder de startdatum van de klaargezette cyclus te laten ontsporen."
-        )
 
     idx = season.cycles.index(active_cycle)
     length_weeks = new_length_weeks or active_cycle.length_weeks
@@ -281,7 +280,20 @@ def edit_active_cycle(
         target_peak_weekly_km=new_target_peak_weekly_km or active_cycle.target_peak_weekly_km,
     )
     season.cycles[idx] = corrected
-    return corrected
+    changed = [corrected]
+
+    cursor_end = corrected.end_date()
+    for i in range(idx + 1, len(season.cycles)):
+        queued = season.cycles[i]
+        rebuilt = build_cycle(
+            name=queued.name, length_weeks=queued.length_weeks, start_date=cursor_end,
+            target_match_date=None, target_peak_weekly_km=queued.target_peak_weekly_km,
+        )
+        season.cycles[i] = rebuilt
+        changed.append(rebuilt)
+        cursor_end = rebuilt.end_date()
+
+    return changed
 
 
 def align_cycle_to_nearest_match(cycle: TrainingCycle, match_dates: list) -> Optional[date]:

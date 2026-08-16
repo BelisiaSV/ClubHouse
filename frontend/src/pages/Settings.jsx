@@ -56,7 +56,6 @@ export default function Settings() {
   const [activeCycleError, setActiveCycleError] = useState(null);
   const [activeCycleSaved, setActiveCycleSaved] = useState(false);
   const [cyclesLoading, setCyclesLoading] = useState(true);
-  const [canEditActiveCycle, setCanEditActiveCycle] = useState(false);
   const [hasAnyCycle, setHasAnyCycle] = useState(true); // avoid a flash of the "start season" form while loading
 
   // "Seizoen starten" — only shown before any cycle exists at all. The
@@ -81,7 +80,6 @@ export default function Settings() {
     try {
       const { active, queued, can_edit_active_cycle } = await getCurrentCycles();
       setActiveCycle(active);
-      setCanEditActiveCycle(can_edit_active_cycle);
       setHasAnyCycle(Boolean(active || queued || can_edit_active_cycle));
       if (active) {
         setActiveCycleForm({
@@ -195,19 +193,15 @@ export default function Settings() {
     setActiveCycleError(null);
     setActiveCycleSaved(false);
     try {
-      const payload = {
+      // start_date/length_weeks always trigger a structural rebuild of the
+      // cycle's weeks on the backend (see PATCH /cycles/active) — any cycle
+      // already queued after this one shifts forward with it automatically.
+      const updated = await patchActiveCycle({
         name: activeCycleForm.name,
         target_peak_weekly_km: Number(activeCycleForm.target_peak_weekly_km),
-      };
-      // start_date/length_weeks trigger a structural rebuild of the cycle's
-      // weeks on the backend (see PATCH /cycles/active) — only send them
-      // when editing is actually allowed, matching canEditActiveCycle's
-      // disabled state on the fields below.
-      if (canEditActiveCycle) {
-        payload.start_date = activeCycleForm.start_date;
-        payload.length_weeks = Number(activeCycleForm.length_weeks);
-      }
-      const updated = await patchActiveCycle(payload);
+        start_date: activeCycleForm.start_date,
+        length_weeks: Number(activeCycleForm.length_weeks),
+      });
       setActiveCycle(updated);
       setActiveCycleForm({
         name: updated.name,
@@ -413,9 +407,9 @@ export default function Settings() {
         <section>
           <h2 className="text-lg font-semibold text-white mb-1">Actieve cyclus</h2>
           <p className="text-sm text-gray-400 mb-4">
-            Naam en piekvolume zijn altijd wijzigbaar. Lengte en startdatum kan je aanpassen
-            zolang er nog geen volgende cyclus is klaargezet — daarna liggen ze vast omdat de
-            weken er al op afgestemd zijn.
+            Naam, piekvolume, lengte en startdatum zijn altijd wijzigbaar. Staat er al een
+            volgende cyclus klaar, dan schuift die automatisch mee zodra je hier de startdatum
+            of lengte aanpast.
           </p>
 
           {!activeCycle && (
@@ -452,30 +446,23 @@ export default function Settings() {
                 Startdatum
                 <input
                   type="date"
-                  disabled={!canEditActiveCycle}
                   value={activeCycleForm.start_date}
                   onChange={(e) => setActiveCycleForm((f) => ({ ...f, start_date: e.target.value }))}
-                  className={`${inputClass} disabled:opacity-50 disabled:cursor-not-allowed`}
+                  className={inputClass}
                 />
               </label>
               <label className={labelClass}>
                 Lengte
                 <select
-                  disabled={!canEditActiveCycle}
                   value={activeCycleForm.length_weeks}
                   onChange={(e) => setActiveCycleForm((f) => ({ ...f, length_weeks: e.target.value }))}
-                  className={`${inputClass} disabled:opacity-50 disabled:cursor-not-allowed`}
+                  className={inputClass}
                 >
                   <option value={4}>4 weken</option>
                   <option value={6}>6 weken</option>
                   <option value={8}>8 weken</option>
                 </select>
               </label>
-              {!canEditActiveCycle && (
-                <p className="text-xs text-gray-500">
-                  Lengte en startdatum liggen vast omdat de volgende cyclus al klaarstaat.
-                </p>
-              )}
 
               {activeCycleError && <p className="text-red-400 text-sm">{activeCycleError}</p>}
               {activeCycleSaved && <p className="text-emerald-400 text-sm">Opgeslagen.</p>}

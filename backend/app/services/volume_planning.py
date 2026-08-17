@@ -12,8 +12,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
-from app.services.makeup_programs import REFERENCE_MATCH_MINUTES
 from app.services.periodization import TrainingCycle, WeekFocus
+
+# Ook gebruikt door services.makeup_programs (die op zijn beurt weer
+# PlayerPosition/calculate_player_match_distance uit dit bestand nodig
+# heeft voor de km-gebaseerde inhaaldrempel) — hier gedefinieerd, niet
+# daar, om een circulaire import tussen de twee modules te vermijden.
+REFERENCE_MATCH_MINUTES = 90.0
 
 
 class PlayerPosition(str, Enum):

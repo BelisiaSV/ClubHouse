@@ -20,13 +20,14 @@ from app.schemas_dashboards import (
 )
 from app.schemas_matches import DEFAULT_MINUTES_BY_STATUS
 from app.services.makeup_programs import (
-    MINUTES_THRESHOLD_FOR_MATCH_MAKEUP,
     generate_makeup_schedules,
     generate_program_for_missed_minutes,
     generate_program_for_missed_training,
+    qualifies_for_match_makeup_by_km,
 )
 from app.services.periodization import get_active_cycle_and_week
 from app.services.platform_admin import ModuleKey
+from app.services.volume_planning import PlayerPosition as ServicePlayerPosition
 
 router = APIRouter(
     prefix="/api/makeup-programs",
@@ -100,7 +101,21 @@ def generate_for_match(
     for player in players:
         existing = minutes_rows.get(player.id)
         minutes_played = existing.minutes_played if existing else DEFAULT_MINUTES_BY_STATUS["basis"]
-        if minutes_played >= MINUTES_THRESHOLD_FOR_MATCH_MAKEUP:
+
+        if player.position is None:
+            # Zonder positie kan de km-gebaseerde inhaaldrempel
+            # (qualifies_for_match_makeup_by_km) niet bepaald worden — deze
+            # speler wordt overgeslagen i.p.v. de hele batch te laten falen.
+            skipped.append(
+                SkippedCandidate(
+                    player_name=f"{player.first_name} {player.last_name}",
+                    reason="Geen positie ingesteld",
+                )
+            )
+            continue
+        position = ServicePlayerPosition(player.position.value)
+
+        if not qualifies_for_match_makeup_by_km(position, minutes_played):
             continue
 
         latest_mas = db.scalar(
@@ -121,6 +136,7 @@ def generate_for_match(
                 "mas_kmh": float(latest_mas.mas_kmh),
                 "reason": "match_minutes",
                 "minutes_played": minutes_played,
+                "position": position,
                 "opponent_label": match.opponent,
             }
         )

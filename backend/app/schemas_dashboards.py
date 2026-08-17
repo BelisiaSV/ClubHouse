@@ -273,6 +273,10 @@ class MakeupCandidate(BaseModel):
     mas_kmh: float = Field(gt=0)
     reason: Literal["match_minutes", "training_absence"]
     minutes_played: Optional[int] = Field(default=None, ge=0, le=90)
+    # Verplicht bij reason == 'match_minutes' — nodig voor de km-gebaseerde
+    # inhaaldrempel (qualifies_for_match_makeup_by_km). generate_makeup_schedules()
+    # geeft zelf een duidelijke ValueError als dit ontbreekt.
+    position: Optional[PlayerPosition] = None
     opponent_label: str = ""
     training_date_label: str = ""
 

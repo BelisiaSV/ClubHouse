@@ -5,6 +5,7 @@ import {
   CompensationIcon,
   LogoutIcon,
   NextTrainingIcon,
+  RpeIcon,
   SettingsIcon,
   SquadIcon,
 } from "./icons.jsx";
@@ -15,6 +16,8 @@ const NAV_ITEMS = [
   { to: "/players", label: "Squad", Icon: SquadIcon },
   { to: "/matches", label: "Kalender", Icon: CalendarIcon },
 ];
+
+const RPE_NAV_ITEM = { to: "/rpe", label: "RPE & Wellness", Icon: RpeIcon };
 
 const linkClass = ({ isActive }) =>
   `flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors duration-150 ${
@@ -27,6 +30,8 @@ const linkClass = ({ isActive }) =>
  */
 export default function Sidebar({ onNavigate }) {
   const { user, club, logout } = useAuth();
+  const rpeModuleActive = Boolean(club?.enabled_modules?.includes("rpe_wellness"));
+  const navItems = rpeModuleActive ? [...NAV_ITEMS, RPE_NAV_ITEM] : NAV_ITEMS;
 
   return (
     <div className="flex h-full w-60 flex-col border-r border-white/10 bg-gray-950">
@@ -46,7 +51,7 @@ export default function Sidebar({ onNavigate }) {
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-        {NAV_ITEMS.map(({ to, end, label, Icon }) => (
+        {navItems.map(({ to, end, label, Icon }) => (
           <NavLink key={to} to={to} end={end} className={linkClass} onClick={onNavigate}>
             <Icon className="h-5 w-5 shrink-0" />
             {label}

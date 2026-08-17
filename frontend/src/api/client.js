@@ -73,6 +73,7 @@ export const uploadClubLogo = (file) => {
 // ---- Players ----
 export const listPlayers = () => client.get("/api/players").then((res) => res.data);
 export const getSquadOverview = () => client.get("/api/players/squad-overview").then((res) => res.data);
+export const getPlayer = (id) => client.get(`/api/players/${id}`).then((res) => res.data);
 export const createPlayer = (payload) => client.post("/api/players", payload).then((res) => res.data);
 export const updatePlayer = (id, payload) => client.patch(`/api/players/${id}`, payload).then((res) => res.data);
 export const deletePlayer = (id) => client.delete(`/api/players/${id}`);

@@ -3,36 +3,12 @@ import { useSearchParams } from "react-router-dom";
 import {
   createPlayer,
   downloadImportTemplate,
-  getMasTestProtocols,
-  getRpeWellnessShouldPrompt,
+  getPlayer,
   getSquadOverview,
   importPlayers,
-  recordMasTest,
-  recordRpeWellness,
+  updatePlayer,
 } from "../api/client";
 import { useAuth } from "../context/AuthContext.jsx";
-
-const EXTERNAL_LOAD_LABELS = {
-  none: "Geen",
-  light: "Licht (school/bureauwerk)",
-  physical: "Fysiek zwaar (bv. bouw, horeca-shift)",
-};
-
-const emptyRpeForm = () => ({
-  entry_date: new Date().toISOString().slice(0, 10),
-  rpe_score: "",
-  session_duration_min: "",
-  sleep_quality: "3",
-  fatigue_level: "3",
-  muscle_soreness: "3",
-  stress_level: "3",
-  mood: "3",
-  injury_flag: false,
-  injury_note: "",
-  external_load_category: "none",
-  extra_activity_today: false,
-  extra_activity_note: "",
-});
 
 const POSITION_LABELS = {
   GK: "Doelman",
@@ -45,6 +21,8 @@ const POSITION_LABELS = {
   ST: "Spits",
 };
 const POSITION_ORDER = ["GK", "CB", "FB", "DM", "CM", "AM", "WNG", "ST"];
+
+const DOMINANT_FOOT_LABELS = { left: "Links", right: "Rechts", both: "Beide" };
 
 // Mirrors app/routers/team_readiness.py's ATTENTION_FLAG_TYPES — the exact
 // flag set the Next Training "Belast/overbelast/geblesseerd" tile counts,
@@ -64,6 +42,17 @@ function initials(firstName, lastName) {
   return `${firstName?.[0] ?? ""}${lastName?.[0] ?? ""}`.toUpperCase();
 }
 
+const emptyEditForm = (p) => ({
+  first_name: p.first_name ?? "",
+  last_name: p.last_name ?? "",
+  jersey_number: p.jersey_number ?? "",
+  position: p.position ?? "",
+  date_of_birth: p.date_of_birth ?? "",
+  dominant_foot: p.dominant_foot ?? "",
+  email: p.email ?? "",
+  phone_number: p.phone_number ?? "",
+});
+
 export default function Players() {
   const { club } = useAuth();
   const rpeModuleActive = Boolean(club?.enabled_modules?.includes("rpe_wellness"));
@@ -75,19 +64,12 @@ export default function Players() {
   const [error, setError] = useState(null);
   const [positionFilter, setPositionFilter] = useState("ALL");
 
-  const [protocols, setProtocols] = useState([]);
-  const [testPlayerId, setTestPlayerId] = useState(null);
-  const [testProtocolKey, setTestProtocolKey] = useState("");
-  const [testRawResult, setTestRawResult] = useState("");
-  const [testDate, setTestDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [testSubmitting, setTestSubmitting] = useState(false);
-  const [testError, setTestError] = useState(null);
-  const [testConfirmation, setTestConfirmation] = useState(null);
-
   const [showAddForm, setShowAddForm] = useState(false);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [jerseyNumber, setJerseyNumber] = useState("");
+  const [position, setPosition] = useState("");
+  const [dateOfBirth, setDateOfBirth] = useState("");
   const [email, setEmail] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [addSubmitting, setAddSubmitting] = useState(false);
@@ -98,12 +80,11 @@ export default function Players() {
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef(null);
 
-  const [shouldPrompt, setShouldPrompt] = useState(null);
-  const [rpePlayerId, setRpePlayerId] = useState(null);
-  const [rpeForm, setRpeForm] = useState(emptyRpeForm());
-  const [rpeSubmitting, setRpeSubmitting] = useState(false);
-  const [rpeError, setRpeError] = useState(null);
-  const [rpeConfirmation, setRpeConfirmation] = useState(null);
+  const [editPlayerId, setEditPlayerId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  const [editLoading, setEditLoading] = useState(false);
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [editError, setEditError] = useState(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -119,19 +100,7 @@ export default function Players() {
 
   useEffect(() => {
     refresh();
-    getMasTestProtocols()
-      .then((result) => {
-        setProtocols(result);
-        if (result.length > 0) setTestProtocolKey(result[0].key);
-      })
-      .catch(() => {});
-    if (rpeModuleActive) {
-      getRpeWellnessShouldPrompt()
-        .then(setShouldPrompt)
-        .catch(() => {});
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rpeModuleActive]);
+  }, []);
 
   const statusCounts = useMemo(() => {
     const counts = { fit: 0, reductie: 0, overbelast: 0, geen_data: 0 };
@@ -158,71 +127,46 @@ export default function Players() {
     setSearchParams(next);
   };
 
-  const openTestForm = (playerId) => {
-    setTestPlayerId(playerId);
-    setTestRawResult("");
-    setTestDate(new Date().toISOString().slice(0, 10));
-    setTestError(null);
-    setTestConfirmation(null);
-  };
-
-  const handleRecordMasTest = async (e) => {
-    e.preventDefault();
-    setTestSubmitting(true);
-    setTestError(null);
+  const openEditForm = async (p) => {
+    setEditPlayerId(p.id);
+    setEditForm(null);
+    setEditError(null);
+    setEditLoading(true);
     try {
-      const result = await recordMasTest({
-        player_id: testPlayerId,
-        protocol_key: testProtocolKey,
-        raw_result_kmh: Number(testRawResult),
-        test_date: testDate,
-      });
-      setTestConfirmation(
-        `MAS-score ${result.mas_kmh} km/u opgeslagen. Kalender bijgewerkt (${result.calendar_events_synced} testmoment(en)).`
-      );
+      // Squad Overview rows don't carry date_of_birth/dominant_foot/contact
+      // fields (those aren't needed for the readiness display) — fetch the
+      // full player record so the edit form never silently blanks them out.
+      const full = await getPlayer(p.id);
+      setEditForm(emptyEditForm(full));
     } catch (err) {
-      setTestError(err.response?.data?.detail ?? err.message);
+      setEditError(err.response?.data?.detail ?? err.message);
     } finally {
-      setTestSubmitting(false);
+      setEditLoading(false);
     }
   };
 
-  const openRpeForm = (playerId) => {
-    setRpePlayerId(playerId);
-    setRpeForm(emptyRpeForm());
-    setRpeError(null);
-    setRpeConfirmation(null);
-  };
-
-  const handleRecordRpeWellness = async (e) => {
+  const handleSaveEdit = async (e) => {
     e.preventDefault();
-    setRpeSubmitting(true);
-    setRpeError(null);
+    setEditSubmitting(true);
+    setEditError(null);
     try {
-      await recordRpeWellness({
-        player_id: rpePlayerId,
-        entry_date: rpeForm.entry_date,
-        session_type: "training",
-        rpe_score: rpeForm.rpe_score === "" ? null : Number(rpeForm.rpe_score),
-        session_duration_min: rpeForm.session_duration_min === "" ? null : Number(rpeForm.session_duration_min),
-        sleep_quality: Number(rpeForm.sleep_quality),
-        fatigue_level: Number(rpeForm.fatigue_level),
-        muscle_soreness: Number(rpeForm.muscle_soreness),
-        stress_level: Number(rpeForm.stress_level),
-        mood: Number(rpeForm.mood),
-        injury_flag: rpeForm.injury_flag,
-        injury_note: rpeForm.injury_flag && rpeForm.injury_note ? rpeForm.injury_note : null,
-        external_load_category: rpeForm.external_load_category,
-        extra_activity_today: rpeForm.extra_activity_today,
-        extra_activity_note:
-          rpeForm.extra_activity_today && rpeForm.extra_activity_note ? rpeForm.extra_activity_note : null,
+      await updatePlayer(editPlayerId, {
+        first_name: editForm.first_name,
+        last_name: editForm.last_name,
+        jersey_number: editForm.jersey_number === "" ? null : Number(editForm.jersey_number),
+        position: editForm.position === "" ? null : editForm.position,
+        date_of_birth: editForm.date_of_birth === "" ? null : editForm.date_of_birth,
+        dominant_foot: editForm.dominant_foot === "" ? null : editForm.dominant_foot,
+        email: editForm.email === "" ? null : editForm.email,
+        phone_number: editForm.phone_number === "" ? null : editForm.phone_number,
       });
-      setRpeConfirmation("Opgeslagen.");
+      setEditPlayerId(null);
+      setEditForm(null);
       await refresh();
     } catch (err) {
-      setRpeError(err.response?.data?.detail ?? err.message);
+      setEditError(err.response?.data?.detail ?? err.message);
     } finally {
-      setRpeSubmitting(false);
+      setEditSubmitting(false);
     }
   };
 
@@ -235,12 +179,16 @@ export default function Players() {
         first_name: firstName,
         last_name: lastName,
         jersey_number: jerseyNumber === "" ? null : Number(jerseyNumber),
+        position: position === "" ? null : position,
+        date_of_birth: dateOfBirth === "" ? null : dateOfBirth,
         email: email || null,
         phone_number: phoneNumber || null,
       });
       setFirstName("");
       setLastName("");
       setJerseyNumber("");
+      setPosition("");
+      setDateOfBirth("");
       setEmail("");
       setPhoneNumber("");
       setShowAddForm(false);
@@ -288,8 +236,9 @@ export default function Players() {
         <div>
           <h1 className="text-3xl font-bold text-white tracking-tight mb-1">Squad Overview</h1>
           <p className="text-sm text-gray-400">
-            Statusoverzicht per speler op basis van afgelegde kilometers uit de voorbije 28 dagen
-            {rpeModuleActive ? ", aangevuld met RPE en wellness-gegevens." : "."}
+            Spelersgegevens en statusoverzicht op basis van afgelegde kilometers uit de voorbije 28 dagen
+            {rpeModuleActive ? ", aangevuld met RPE en wellness-gegevens." : "."} MAS-testen verlopen via de
+            kalender, RPE-invoer via het RPE &amp; Wellness-tabblad.
           </p>
         </div>
         <button
@@ -308,13 +257,6 @@ export default function Players() {
           <button onClick={clearFlaggedFilter} className="underline hover:opacity-80 shrink-0">
             Filter wissen
           </button>
-        </div>
-      )}
-
-      {rpeModuleActive && shouldPrompt?.is_session_day && (
-        <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 rounded-2xl px-5 py-3.5 mb-6 text-sm">
-          Vandaag is een {shouldPrompt.reason === "match" ? "wedstrijddag" : "trainingsdag"} — vergeet niet RPE
-          en wellness in te vullen bij de spelers die trainen of spelen.
         </div>
       )}
 
@@ -344,6 +286,27 @@ export default function Players() {
               onChange={(e) => setJerseyNumber(e.target.value)}
               className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ring-brand"
             />
+            <select
+              value={position}
+              onChange={(e) => setPosition(e.target.value)}
+              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ring-brand"
+            >
+              <option value="">Positie (optioneel)</option>
+              {POSITION_ORDER.map((pos) => (
+                <option key={pos} value={pos}>
+                  {pos} · {POSITION_LABELS[pos]}
+                </option>
+              ))}
+            </select>
+            <label className="flex flex-col text-gray-400 text-xs gap-1">
+              Geboortedatum
+              <input
+                type="date"
+                value={dateOfBirth}
+                onChange={(e) => setDateOfBirth(e.target.value)}
+                className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ring-brand"
+              />
+            </label>
             <input
               type="email"
               placeholder="E-mailadres"
@@ -467,8 +430,7 @@ export default function Players() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredSquad.map((p) => {
               const meta = STATUS_META[p.status];
-              const isTestOpen = testPlayerId === p.id;
-              const isRpeOpen = rpePlayerId === p.id;
+              const isEditing = editPlayerId === p.id;
               return (
                 <div
                   key={p.id}
@@ -522,196 +484,97 @@ export default function Players() {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => (isTestOpen ? setTestPlayerId(null) : openTestForm(p.id))}
-                      className="text-brand hover:opacity-80 text-xs font-medium"
-                    >
-                      {isTestOpen ? "Sluiten" : "MAS-test invoeren"}
-                    </button>
-                    {rpeModuleActive && (
-                      <button
-                        onClick={() => (isRpeOpen ? setRpePlayerId(null) : openRpeForm(p.id))}
-                        className="text-brand hover:opacity-80 text-xs font-medium"
-                      >
-                        {isRpeOpen ? "Sluiten" : "RPE & wellness invullen"}
-                      </button>
-                    )}
-                  </div>
+                  <button
+                    onClick={() => (isEditing ? setEditPlayerId(null) : openEditForm(p))}
+                    className="text-brand hover:opacity-80 text-xs font-medium"
+                  >
+                    {isEditing ? "Sluiten" : "Bewerken"}
+                  </button>
 
-                  {rpeModuleActive && isRpeOpen && (
-                    <form onSubmit={handleRecordRpeWellness} className="mt-3 pt-3 border-t border-white/10 space-y-2.5 text-sm">
+                  {isEditing && editLoading && <p className="text-gray-500 text-xs mt-3 pt-3 border-t border-white/10">Laden…</p>}
+                  {isEditing && editError && !editForm && <p className="text-red-400 text-xs mt-3 pt-3 border-t border-white/10">{editError}</p>}
+
+                  {isEditing && editForm && (
+                    <form onSubmit={handleSaveEdit} className="mt-3 pt-3 border-t border-white/10 space-y-2.5 text-sm">
                       <div className="grid grid-cols-2 gap-2.5">
-                        <label className="flex flex-col text-gray-300 text-xs gap-1">
-                          Datum
-                          <input
-                            type="date"
-                            required
-                            value={rpeForm.entry_date}
-                            onChange={(e) => setRpeForm((f) => ({ ...f, entry_date: e.target.value }))}
-                            className="bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-2 ring-brand"
-                          />
-                        </label>
-                        <label className="flex flex-col text-gray-300 text-xs gap-1">
-                          RPE (1-10)
-                          <input
-                            type="number"
-                            min="1"
-                            max="10"
-                            value={rpeForm.rpe_score}
-                            onChange={(e) => setRpeForm((f) => ({ ...f, rpe_score: e.target.value }))}
-                            className="bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-2 ring-brand"
-                          />
-                        </label>
-                        <label className="flex flex-col text-gray-300 text-xs gap-1 col-span-2">
-                          Sessieduur (min)
-                          <input
-                            type="number"
-                            min="1"
-                            value={rpeForm.session_duration_min}
-                            onChange={(e) => setRpeForm((f) => ({ ...f, session_duration_min: e.target.value }))}
-                            className="bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-2 ring-brand"
-                          />
-                        </label>
-                      </div>
-
-                      <div className="grid grid-cols-5 gap-1.5">
-                        {[
-                          { key: "sleep_quality", label: "Slaap", title: "1 = zeer slecht … 5 = zeer goed" },
-                          { key: "fatigue_level", label: "Vermoeid", title: "1 = heel fris … 5 = heel vermoeid" },
-                          { key: "muscle_soreness", label: "Spierpijn", title: "1 = geen … 5 = veel" },
-                          { key: "stress_level", label: "Stress", title: "1 = ontspannen … 5 = gestrest" },
-                          { key: "mood", label: "Humeur", title: "1 = slecht … 5 = heel goed" },
-                        ].map(({ key, label, title }) => (
-                          <label key={key} className="flex flex-col text-gray-300 text-[10px] gap-1" title={title}>
-                            {label}
-                            <select
-                              value={rpeForm[key]}
-                              onChange={(e) => setRpeForm((f) => ({ ...f, [key]: e.target.value }))}
-                              className="bg-gray-950 border border-white/10 text-white rounded-lg px-1 py-1.5 text-xs focus:outline-none focus:ring-2 ring-brand"
-                            >
-                              {[1, 2, 3, 4, 5].map((n) => (
-                                <option key={n} value={n}>
-                                  {n}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        ))}
-                      </div>
-
-                      <label className="flex flex-col text-gray-300 text-xs gap-1">
-                        Externe belasting vandaag (school/werk)
+                        <input
+                          required
+                          placeholder="Voornaam"
+                          value={editForm.first_name}
+                          onChange={(e) => setEditForm((f) => ({ ...f, first_name: e.target.value }))}
+                          className="bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-2 ring-brand"
+                        />
+                        <input
+                          required
+                          placeholder="Naam"
+                          value={editForm.last_name}
+                          onChange={(e) => setEditForm((f) => ({ ...f, last_name: e.target.value }))}
+                          className="bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-2 ring-brand"
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          max="99"
+                          placeholder="Rugnummer"
+                          value={editForm.jersey_number}
+                          onChange={(e) => setEditForm((f) => ({ ...f, jersey_number: e.target.value }))}
+                          className="bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-2 ring-brand"
+                        />
                         <select
-                          value={rpeForm.external_load_category}
-                          onChange={(e) => setRpeForm((f) => ({ ...f, external_load_category: e.target.value }))}
+                          value={editForm.position}
+                          onChange={(e) => setEditForm((f) => ({ ...f, position: e.target.value }))}
                           className="bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-2 ring-brand"
                         >
-                          {Object.entries(EXTERNAL_LOAD_LABELS).map(([value, label]) => (
+                          <option value="">Positie</option>
+                          {POSITION_ORDER.map((pos) => (
+                            <option key={pos} value={pos}>
+                              {pos} · {POSITION_LABELS[pos]}
+                            </option>
+                          ))}
+                        </select>
+                        <label className="flex flex-col text-gray-400 text-[10px] gap-1">
+                          Geboortedatum
+                          <input
+                            type="date"
+                            value={editForm.date_of_birth}
+                            onChange={(e) => setEditForm((f) => ({ ...f, date_of_birth: e.target.value }))}
+                            className="bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-2 ring-brand"
+                          />
+                        </label>
+                        <select
+                          value={editForm.dominant_foot}
+                          onChange={(e) => setEditForm((f) => ({ ...f, dominant_foot: e.target.value }))}
+                          className="bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-2 ring-brand"
+                        >
+                          <option value="">Voorkeursvoet</option>
+                          {Object.entries(DOMINANT_FOOT_LABELS).map(([value, label]) => (
                             <option key={value} value={value}>
                               {label}
                             </option>
                           ))}
                         </select>
-                      </label>
-
-                      <label className="flex items-center gap-2 text-gray-300 text-xs">
                         <input
-                          type="checkbox"
-                          checked={rpeForm.extra_activity_today}
-                          onChange={(e) => setRpeForm((f) => ({ ...f, extra_activity_today: e.target.checked }))}
-                          className="rounded border-white/20 bg-gray-950"
+                          type="email"
+                          placeholder="E-mailadres"
+                          value={editForm.email}
+                          onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))}
+                          className="bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-2 text-xs col-span-2 focus:outline-none focus:ring-2 ring-brand"
                         />
-                        Nog een andere sportieve inspanning gehad vandaag?
-                      </label>
-                      {rpeForm.extra_activity_today && (
                         <input
-                          type="text"
-                          placeholder="Korte omschrijving (optioneel)"
-                          value={rpeForm.extra_activity_note}
-                          onChange={(e) => setRpeForm((f) => ({ ...f, extra_activity_note: e.target.value }))}
-                          className="w-full bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-2 ring-brand"
+                          placeholder="Telefoonnummer"
+                          value={editForm.phone_number}
+                          onChange={(e) => setEditForm((f) => ({ ...f, phone_number: e.target.value }))}
+                          className="bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-2 text-xs col-span-2 focus:outline-none focus:ring-2 ring-brand"
                         />
-                      )}
-
-                      <label className="flex items-center gap-2 text-gray-300 text-xs">
-                        <input
-                          type="checkbox"
-                          checked={rpeForm.injury_flag}
-                          onChange={(e) => setRpeForm((f) => ({ ...f, injury_flag: e.target.checked }))}
-                          className="rounded border-white/20 bg-gray-950"
-                        />
-                        Actief blessure- of pijnsignaal
-                      </label>
-                      {rpeForm.injury_flag && (
-                        <input
-                          type="text"
-                          placeholder="Korte notitie (optioneel)"
-                          value={rpeForm.injury_note}
-                          onChange={(e) => setRpeForm((f) => ({ ...f, injury_note: e.target.value }))}
-                          className="w-full bg-gray-950 border border-white/10 text-white rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-2 ring-brand"
-                        />
-                      )}
-
+                      </div>
+                      {editError && <p className="text-red-400 text-xs">{editError}</p>}
                       <button
                         type="submit"
-                        disabled={rpeSubmitting}
+                        disabled={editSubmitting}
                         className="btn-brand text-white px-4 py-2 rounded-lg text-sm font-medium w-full disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {rpeSubmitting ? "Bezig…" : "Opslaan"}
+                        {editSubmitting ? "Bezig…" : "Opslaan"}
                       </button>
-                      {rpeError && <p className="text-red-400 text-xs">{rpeError}</p>}
-                      {rpeConfirmation && <p className="text-emerald-400 text-xs">{rpeConfirmation}</p>}
-                    </form>
-                  )}
-
-                  {isTestOpen && (
-                    <form onSubmit={handleRecordMasTest} className="mt-3 pt-3 border-t border-white/10 space-y-2.5 text-sm">
-                      <label className="flex flex-col text-gray-300 text-xs gap-1">
-                        Protocol
-                        <select
-                          value={testProtocolKey}
-                          onChange={(e) => setTestProtocolKey(e.target.value)}
-                          className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ring-brand"
-                        >
-                          {protocols.map((protocol) => (
-                            <option key={protocol.key} value={protocol.key}>
-                              {protocol.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="flex flex-col text-gray-300 text-xs gap-1">
-                        Resultaat (km/u)
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="0.1"
-                          required
-                          value={testRawResult}
-                          onChange={(e) => setTestRawResult(e.target.value)}
-                          className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ring-brand"
-                        />
-                      </label>
-                      <label className="flex flex-col text-gray-300 text-xs gap-1">
-                        Testdatum
-                        <input
-                          type="date"
-                          required
-                          value={testDate}
-                          onChange={(e) => setTestDate(e.target.value)}
-                          className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ring-brand"
-                        />
-                      </label>
-                      <button
-                        type="submit"
-                        disabled={testSubmitting}
-                        className="btn-brand text-white px-4 py-2 rounded-lg text-sm font-medium w-full disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {testSubmitting ? "Bezig…" : "Opslaan"}
-                      </button>
-                      {testError && <p className="text-red-400 text-xs">{testError}</p>}
-                      {testConfirmation && <p className="text-emerald-400 text-xs">{testConfirmation}</p>}
                     </form>
                   )}
                 </div>

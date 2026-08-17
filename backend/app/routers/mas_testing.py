@@ -16,6 +16,7 @@ from app.routers.periodization import load_season_from_db
 from app.schemas_dashboards import (
     CalendarEventSchema,
     ConfirmRunningGroupsRequest,
+    CurrentMasResultSchema,
     MASTestProtocolSchema,
     PlanNextMasTestRequest,
     RecordMasTestBatchRequest,
@@ -111,6 +112,33 @@ def plan_next_test(payload: PlanNextMasTestRequest, current_user: User = Depends
         due_soon_window_days=payload.due_soon_window_days,
     )
     return TestPlanningResultSchema.model_validate(result)
+
+
+@router.get("/current-results", response_model=list[CurrentMasResultSchema])
+def current_results(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Elke actieve speler's meest recente MAS-score — voedt het
+    'Huidige MAS-resultaten'-dashboardwidget. Spelers zonder test worden
+    gewoon weggelaten (geen 'geen data'-rij)."""
+    players = db.scalars(
+        select(Player).where(Player.club_id == current_user.club_id, Player.is_active.is_(True))
+    ).all()
+
+    results = []
+    for player in players:
+        latest = db.scalar(
+            select(MasTest).where(MasTest.player_id == player.id).order_by(MasTest.test_date.desc()).limit(1)
+        )
+        if latest is None:
+            continue
+        results.append(
+            CurrentMasResultSchema(
+                player_id=player.id,
+                player_name=f"{player.first_name} {player.last_name}",
+                mas_kmh=float(latest.mas_kmh),
+                test_date=latest.test_date,
+            )
+        )
+    return results
 
 
 @router.get("/zones", response_model=list[TrainingZoneSchema])

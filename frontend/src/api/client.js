@@ -164,6 +164,24 @@ export const confirmRunningGroups = (groups) =>
 export const getRunningGroups = () =>
   client.get("/api/mas-testing/running-groups").then((res) => res.data);
 
+export const getCurrentMasResults = () =>
+  client.get("/api/mas-testing/current-results").then((res) => res.data);
+
+// ---- Dashboard widgets: per-coach layout ----
+export const getAvailableDashboardWidgets = () =>
+  client.get("/api/dashboard-widgets/available").then((res) => res.data);
+
+export const getDashboardPreferences = () =>
+  client.get("/api/dashboard-widgets/preferences").then((res) => res.data);
+
+export const toggleDashboardWidget = (widgetKey, enabled, position) =>
+  client
+    .patch("/api/dashboard-widgets/preferences/toggle", { widget_key: widgetKey, enabled, position })
+    .then((res) => res.data);
+
+export const reorderDashboardWidgets = (newOrder) =>
+  client.patch("/api/dashboard-widgets/preferences/reorder", { new_order: newOrder }).then((res) => res.data);
+
 // ---- RPE / wellness ----
 export const getRpeWellnessShouldPrompt = (date) =>
   client.get("/api/rpe-wellness/should-prompt", { params: date ? { date } : {} }).then((res) => res.data);

@@ -187,3 +187,153 @@ def calculate_monthly_addon_price(settings: ClubModuleSettings) -> float:
         for key in settings.enabled_modules
         if MODULE_REGISTRY[key].is_addon
     ), 2)
+
+
+# =============================================================
+# PERSOONLIJK DASHBOARD-WIDGET-REGISTER (per coach, niet per club)
+# =============================================================
+# Losstaand van MODULE_REGISTRY: modules bepalen WAT een club mag zien
+# (door de platformadmin ingesteld), widgets bepalen HOE een individuele
+# coach zijn eigen dashboard indeelt (door de coach zelf ingesteld,
+# 'Toevoegen aan dashboard'-knop). Een widget is enkel beschikbaar als de
+# onderliggende module actief is voor die club — zo blijft alles
+# consistent met het entitlements-systeem.
+
+class DashboardWidgetKey(str, Enum):
+    SQUAD_COUNT = "squad_count"                        # 'Spelersgroep': aantal spelers
+    ATTENTION_PLAYERS = "attention_players"             # belast/overbelast/geblesseerd
+    SESSIONS_THIS_WEEK = "sessions_this_week"
+    NEXT_SESSION = "next_session"
+    NEXT_MATCH = "next_match"
+    RECENT_SESSIONS = "recent_sessions"
+    NEXT_TRAINING_BUILDER = "next_training_builder"     # 'Volgende training samenstellen'
+    CURRENT_MAS_RESULTS = "current_mas_results"
+    UPCOMING_MAS_TEST = "upcoming_mas_test"              # met datum
+    MAKE_SCHEDULES_SHORTCUT = "make_schedules_shortcut"
+    CYCLE_WEEK_STATUS = "cycle_week_status"              # bv. 'Cyclus 1 · Week 2 · Accumulatie'
+
+
+@dataclass
+class DashboardWidgetDefinition:
+    key: DashboardWidgetKey
+    label: str
+    description: str
+    requires_module: Optional[ModuleKey]   # None = altijd beschikbaar, geen moduleafhankelijkheid
+    default_enabled: bool                   # standaard aan bij een nieuw coach-account
+
+
+DASHBOARD_WIDGET_REGISTRY = {
+    DashboardWidgetKey.SQUAD_COUNT: DashboardWidgetDefinition(
+        key=DashboardWidgetKey.SQUAD_COUNT, label="Spelersgroep",
+        description="Aantal spelers in de actieve kern.",
+        requires_module=ModuleKey.SQUAD_OVERVIEW, default_enabled=True,
+    ),
+    DashboardWidgetKey.ATTENTION_PLAYERS: DashboardWidgetDefinition(
+        key=DashboardWidgetKey.ATTENTION_PLAYERS, label="Belast / overbelast / geblesseerd",
+        description="Aantal spelers met een actieve aandachtsvlag (km- of RPE-gebaseerd).",
+        requires_module=None, default_enabled=True,
+    ),
+    DashboardWidgetKey.SESSIONS_THIS_WEEK: DashboardWidgetDefinition(
+        key=DashboardWidgetKey.SESSIONS_THIS_WEEK, label="Sessies deze week",
+        description="Aantal trainingen + wedstrijden in de actieve cyclusweek.",
+        requires_module=ModuleKey.KALENDER, default_enabled=True,
+    ),
+    DashboardWidgetKey.NEXT_SESSION: DashboardWidgetDefinition(
+        key=DashboardWidgetKey.NEXT_SESSION, label="Volgende sessie",
+        description="Eerstvolgende training of wedstrijd.",
+        requires_module=ModuleKey.KALENDER, default_enabled=True,
+    ),
+    DashboardWidgetKey.NEXT_MATCH: DashboardWidgetDefinition(
+        key=DashboardWidgetKey.NEXT_MATCH, label="Volgende wedstrijd",
+        description="Eerstvolgende wedstrijd met datum en tegenstander.",
+        requires_module=ModuleKey.MAS_COMPENSATIE, default_enabled=False,
+    ),
+    DashboardWidgetKey.RECENT_SESSIONS: DashboardWidgetDefinition(
+        key=DashboardWidgetKey.RECENT_SESSIONS, label="Recente sessies",
+        description="Laatst afgewerkte trainingen/wedstrijden met belasting en teamgemiddelde RPE.",
+        requires_module=ModuleKey.KALENDER, default_enabled=True,
+    ),
+    DashboardWidgetKey.NEXT_TRAINING_BUILDER: DashboardWidgetDefinition(
+        key=DashboardWidgetKey.NEXT_TRAINING_BUILDER, label="Volgende training samenstellen",
+        description="Snelkoppeling naar het samenstellen van de eerstvolgende sessie.",
+        requires_module=ModuleKey.NEXT_TRAINING, default_enabled=True,
+    ),
+    DashboardWidgetKey.CURRENT_MAS_RESULTS: DashboardWidgetDefinition(
+        key=DashboardWidgetKey.CURRENT_MAS_RESULTS, label="Huidige MAS-resultaten",
+        description="Meest recente MAS-score per speler.",
+        requires_module=ModuleKey.MAS_TEST, default_enabled=False,
+    ),
+    DashboardWidgetKey.UPCOMING_MAS_TEST: DashboardWidgetDefinition(
+        key=DashboardWidgetKey.UPCOMING_MAS_TEST, label="Aankomende MAS-test",
+        description="Eerstvolgende geplande teamtestdatum.",
+        requires_module=ModuleKey.MAS_TEST, default_enabled=True,
+    ),
+    DashboardWidgetKey.MAKE_SCHEDULES_SHORTCUT: DashboardWidgetDefinition(
+        key=DashboardWidgetKey.MAKE_SCHEDULES_SHORTCUT, label="Schema's maken",
+        description="Snelkoppeling naar de 'Maak schema's'-actie.",
+        requires_module=ModuleKey.MAS_COMPENSATIE, default_enabled=False,
+    ),
+    DashboardWidgetKey.CYCLE_WEEK_STATUS: DashboardWidgetDefinition(
+        key=DashboardWidgetKey.CYCLE_WEEK_STATUS, label="Cyclusweek-status",
+        description="Bv. 'Cyclus 1 · Week 2 · Accumulatie', afhankelijk van de actieve cyclus.",
+        requires_module=ModuleKey.KALENDER, default_enabled=True,
+    ),
+}
+
+
+@dataclass
+class CoachDashboardPreferences:
+    coach_id: str
+    enabled_widgets: list = field(default_factory=list)   # geordende lijst DashboardWidgetKey — volgorde = layout
+
+
+def get_default_dashboard_widgets(enabled_club_modules: set) -> list:
+    """Standaardindeling bij een nieuw coach-account: alle widgets met
+    default_enabled=True waarvan de vereiste module actief is voor de club."""
+    return [
+        key for key, definition in DASHBOARD_WIDGET_REGISTRY.items()
+        if definition.default_enabled
+        and (definition.requires_module is None or definition.requires_module in enabled_club_modules)
+    ]
+
+
+def get_available_widgets_for_club(enabled_club_modules: set) -> list:
+    """Alle widgets die de coach ZOU KUNNEN toevoegen — gefilterd op wat
+    de club effectief geactiveerd heeft. Dit voedt de 'Toevoegen aan
+    dashboard'-keuzelijst."""
+    return [
+        definition for definition in DASHBOARD_WIDGET_REGISTRY.values()
+        if definition.requires_module is None or definition.requires_module in enabled_club_modules
+    ]
+
+
+def toggle_dashboard_widget(prefs: CoachDashboardPreferences, widget_key: DashboardWidgetKey,
+                             enabled: bool, position: Optional[int] = None) -> CoachDashboardPreferences:
+    """Voegt een widget toe/verwijdert hem uit de persoonlijke lay-out van
+    de coach. 'position' laat toe een widget op een specifieke plek in te
+    voegen (voor de eenvoudige aan/uit-toggle volstaat None — komt dan
+    achteraan)."""
+    if widget_key not in DASHBOARD_WIDGET_REGISTRY:
+        raise ValueError(f"Onbekende widget: {widget_key}")
+
+    if enabled:
+        if widget_key not in prefs.enabled_widgets:
+            if position is not None:
+                prefs.enabled_widgets.insert(position, widget_key)
+            else:
+                prefs.enabled_widgets.append(widget_key)
+    else:
+        if widget_key in prefs.enabled_widgets:
+            prefs.enabled_widgets.remove(widget_key)
+    return prefs
+
+
+def reorder_dashboard_widgets(prefs: CoachDashboardPreferences, new_order: list) -> CoachDashboardPreferences:
+    """Herschikt de widgets (drag-and-drop op het dashboard zelf, zelfde
+    principe als het herschikken van oefenvorm-blokken in een sessie).
+    Valideert dat de nieuwe volgorde exact dezelfde set widgets bevat —
+    geen widgets erbij of kwijt tijdens het herschikken."""
+    if set(new_order) != set(prefs.enabled_widgets):
+        raise ValueError("De nieuwe volgorde moet exact dezelfde widgets bevatten als voorheen.")
+    prefs.enabled_widgets = new_order
+    return prefs

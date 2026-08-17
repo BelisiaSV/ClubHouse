@@ -13,6 +13,7 @@ from app.routers import (
     auth,
     calendar,
     clubs,
+    dashboard_widgets,
     makeup_programs,
     mas,
     mas_testing,
@@ -86,6 +87,7 @@ app.include_router(team_readiness.router)
 app.include_router(volume_planning.router)
 app.include_router(calendar.router)
 app.include_router(training_sessions.router)
+app.include_router(dashboard_widgets.router)
 app.include_router(admin.router)
 
 if not USING_SUPABASE_STORAGE:

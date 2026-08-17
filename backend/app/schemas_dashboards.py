@@ -248,6 +248,13 @@ class RecordMasTestResponse(BaseModel):
     calendar_events_synced: int
 
 
+class CurrentMasResultSchema(BaseModel):
+    player_id: uuid.UUID
+    player_name: str
+    mas_kmh: float
+    test_date: date
+
+
 class MasTestBatchEntry(BaseModel):
     player_id: uuid.UUID
     # None/blank = the coach hasn't filled this player's result in yet —
@@ -652,3 +659,27 @@ class WeeklyKmPlanSchema(BaseModel):
     training_distance_km: float
     km_per_training: float
     note: str
+
+
+# ---- dashboard_widgets.py router: personal dashboard layout ----
+class DashboardWidgetSchema(BaseModel):
+    key: str
+    label: str
+    description: str
+    requires_module: Optional[str] = None
+    default_enabled: bool
+
+
+class DashboardPreferencesSchema(BaseModel):
+    # Ordered — array order IS the layout order.
+    enabled_widgets: list[str]
+
+
+class ToggleDashboardWidgetRequest(BaseModel):
+    widget_key: str
+    enabled: bool
+    position: Optional[int] = None
+
+
+class ReorderDashboardWidgetsRequest(BaseModel):
+    new_order: list[str]

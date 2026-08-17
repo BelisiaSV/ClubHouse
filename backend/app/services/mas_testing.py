@@ -206,6 +206,75 @@ def recalculate_training_zones(mas_kmh: float) -> list:
     ]
 
 
+# --- LOOPTYPEGROEPEN: spelers indelen op MAS voor groepsgebaseerde intervaldoelen ---
+# I.p.v. voor elke speler apart een intervalschema op te stellen, worden
+# spelers op basis van hun MAS-score in enkele groepen ingedeeld, elk met
+# hetzelfde intervaldoel binnen de groep. Praktisch onmisbaar zonder eigen
+# fysieke trainer, en overzichtelijker voor de coach op het veld.
+DEFAULT_RUN_GROUP_LABELS = {
+    2: ["De Motoren", "De Diesels"],
+    3: ["De Motoren", "De Hybrides", "De Diesels"],
+    4: ["De Motoren", "De Sportwagens", "De Hybrides", "De Diesels"],
+}
+
+
+@dataclass
+class RunningGroup:
+    label: str
+    players: list                # list[str] spelersnamen
+    prescriptie_mas_kmh: float   # VEILIGHEIDSANKER: laagste MAS in de groep, niet het gemiddelde
+    avg_mas_kmh: float
+    min_mas_kmh: float
+    max_mas_kmh: float
+
+
+def assign_running_groups(players_mas: list, num_groups: int = 3,
+                           group_labels: Optional[list] = None) -> list:
+    """
+    Verdeelt spelers in 'num_groups' looptypegroepen op basis van hun MAS-
+    score (hoogste MAS eerst), en levert per groep een prescriptie-MAS.
+
+    BELANGRIJKE KEUZE: de prescriptie-MAS is de LAAGSTE score binnen de
+    groep, niet het gemiddelde — net als bij de droge-loopvorm-aanvulling
+    wordt bewust de meest voorzichtige waarde gebruikt, zodat de traagste
+    speler in elke groep niet structureel overvraagd wordt. De coach kan
+    dit desgewenst zelf optrekken richting het gemiddelde voor groepen met
+    weinig spreiding.
+
+    players_mas: [{'player_name': str, 'mas_kmh': float}, ...]
+    """
+    if num_groups < 2:
+        raise ValueError("Minstens 2 groepen nodig.")
+    if len(players_mas) < num_groups:
+        raise ValueError(f"Te weinig spelers ({len(players_mas)}) voor {num_groups} groepen.")
+
+    labels = group_labels or DEFAULT_RUN_GROUP_LABELS.get(
+        num_groups, [f"Groep {i + 1}" for i in range(num_groups)]
+    )
+    if len(labels) != num_groups:
+        raise ValueError(f"Aantal labels ({len(labels)}) moet gelijk zijn aan num_groups ({num_groups}).")
+
+    sorted_players = sorted(players_mas, key=lambda p: p["mas_kmh"], reverse=True)
+
+    # Verdeel zo gelijk mogelijk over de groepen (laatste groepen krijgen
+    # evt. één speler minder bij een niet-deelbaar aantal).
+    base_size, remainder = divmod(len(sorted_players), num_groups)
+    groups = []
+    cursor = 0
+    for i in range(num_groups):
+        size = base_size + (1 if i < remainder else 0)
+        chunk = sorted_players[cursor:cursor + size]
+        cursor += size
+        mas_values = [p["mas_kmh"] for p in chunk]
+        groups.append(RunningGroup(
+            label=labels[i], players=[p["player_name"] for p in chunk],
+            prescriptie_mas_kmh=round(min(mas_values), 2),
+            avg_mas_kmh=round(sum(mas_values) / len(mas_values), 2),
+            min_mas_kmh=round(min(mas_values), 2), max_mas_kmh=round(max(mas_values), 2),
+        ))
+    return groups
+
+
 # --- 2.5 MAS-TESTPROTOCOLLEN: bibliotheek waaruit de trainer kiest --------
 # Vier veldtesten die voor amateurvoetbal haalbaar zijn, elk met eigen
 # afweging tussen nauwkeurigheid, benodigdheden en voetbalspecificiteit

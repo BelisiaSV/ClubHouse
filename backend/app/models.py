@@ -537,6 +537,48 @@ class CalendarEventPlayer(Base):
 
 
 # =========================================================
+# RUNNING GROUPS (looptypegroepen)
+# =========================================================
+class RunningGroup(Base):
+    """A confirmed looptypegroep for a club — services.mas_testing.
+    assign_running_groups() suggests these after a batch MAS test, the coach
+    can adjust membership, and app/routers/mas_testing.py's
+    POST /running-groups/confirm wholesale replaces the club's previous
+    groups with the new set (like _sync_mas_test_calendar does for
+    projected calendar events: delete-then-recreate, not a diff/merge)."""
+
+    __tablename__ = "running_groups"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    club_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("clubs.id", ondelete="CASCADE"), nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    # Server-recomputed from final group membership on every confirm — never
+    # trusted from the client — same veilig-voorschrift-anker convention as
+    # assign_running_groups(): the LOWEST MAS in the group, not the average.
+    prescriptie_mas_kmh: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False)
+    avg_mas_kmh: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False)
+    min_mas_kmh: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False)
+    max_mas_kmh: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+    players: Mapped[list["RunningGroupPlayer"]] = relationship(
+        back_populates="group", cascade="all, delete-orphan"
+    )
+
+
+class RunningGroupPlayer(Base):
+    __tablename__ = "running_group_players"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    running_group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("running_groups.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    player_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
+
+    group: Mapped["RunningGroup"] = relationship(back_populates="players")
+
+
+# =========================================================
 # TRAINING SESSIONS (oefenvormen: composition proposal / vorm-target)
 # =========================================================
 class TrainingSession(Base):

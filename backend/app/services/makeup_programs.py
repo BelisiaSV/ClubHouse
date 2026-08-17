@@ -10,10 +10,16 @@ Zuiver en side-effect-vrij: geen databasetoegang.
 
 from dataclasses import dataclass
 from math import ceil
+from typing import Optional
 
 from app.services.periodization import CycleWeek, WeekFocus
+from app.services.volume_planning import (
+    POSITION_REFERENCE_MATCH_DISTANCE_KM,
+    REFERENCE_MATCH_MINUTES,
+    PlayerPosition,
+    calculate_player_match_distance,
+)
 
-REFERENCE_MATCH_MINUTES = 90.0
 MINUTES_THRESHOLD_FOR_MATCH_MAKEUP = 60   # club-instelbaar
 
 # Intensiteitsprofiel per gemiste-trainingsweek-focus (individuele inhaalsessie)
@@ -53,7 +59,41 @@ class GeneratedRunningProgram:
 
 def qualifies_for_match_makeup(minutes_played: int,
                                 threshold: int = MINUTES_THRESHOLD_FOR_MATCH_MAKEUP) -> bool:
+    """Eenvoudige, positie-onafhankelijke vlakke minutendrempel — bewaard
+    voor eenvoudige gevallen/tests. generate_makeup_schedules() gebruikt
+    voortaan qualifies_for_match_makeup_by_km() als precieze, positie-
+    gebonden variant (zie hieronder)."""
     return 0 <= minutes_played < threshold
+
+
+MATCH_KM_DEFICIT_THRESHOLD_KM = 6.83  # vaste, ABSOLUTE grens (65% van de gemiddelde
+                                        # teamreferentie van 10,5 km)
+
+
+def qualifies_for_match_makeup_by_km(
+    position: PlayerPosition,
+    minutes_played: int,
+    min_required_km: float = MATCH_KM_DEFICIT_THRESHOLD_KM,
+    reference_distances: Optional[dict] = None,
+) -> bool:
+    """
+    Preciezer dan een vlakke minutendrempel: vergelijkt de EFFECTIEF
+    AFGELEGDE afstand (calculate_player_match_distance, positiegebonden)
+    met een VASTE, ABSOLUTE ondergrens (~6,8 km, 65% van de gemiddelde
+    teamreferentie) — NIET met een percentage van de eigen positiereferentie.
+
+    Waarom dit onderscheid telt: een percentage van de EIGEN positiereferentie
+    valt wiskundig weg tegen zichzelf (elke positie kruist dezelfde 58,5
+    minuten, ongeacht hun afstand/minuut) — dat verkleedt enkel de oude
+    vlakke minutengrens. Met een vaste absolute km-grens krijgt elke
+    positie wél een eigen kruispunt: een centrale verdediger (minder
+    km/minuut) mag langer spelen vóór hij onder de grens zakt dan een
+    vleugelspeler (meer km/minuut) — precies het positie-onderscheid dat
+    hier bedoeld is.
+    """
+    refs = reference_distances or POSITION_REFERENCE_MATCH_DISTANCE_KM
+    actual_km = calculate_player_match_distance(position, minutes_played, refs)
+    return actual_km < min_required_km
 
 
 def _compensation_factor(minutes_played: float) -> float:
@@ -205,13 +245,20 @@ def generate_makeup_schedules(candidates: list, week: CycleWeek) -> list:
 
     Verwacht per kandidaat:
       {'player_name': str, 'mas_kmh': float, 'reason': 'match_minutes' | 'training_absence',
-       'minutes_played': int (enkel bij 'match_minutes'),
+       'minutes_played': int, 'position': PlayerPosition (BEIDE verplicht bij
+       'match_minutes' — positie is nodig voor de km-gebaseerde inhaaldrempel,
+       zie qualifies_for_match_makeup_by_km),
        'opponent_label' / 'training_date_label': str (optioneel)}
     """
     programs = []
     for c in candidates:
         if c["reason"] == "match_minutes":
-            if not qualifies_for_match_makeup(c["minutes_played"]):
+            if "position" not in c or c["position"] is None:
+                raise ValueError(
+                    f"Kandidaat '{c.get('player_name')}' mist 'position' — nodig voor de "
+                    f"km-gebaseerde inhaaldrempel (qualifies_for_match_makeup_by_km)."
+                )
+            if not qualifies_for_match_makeup_by_km(c["position"], c["minutes_played"]):
                 continue
             programs.append(generate_program_for_missed_minutes(
                 player_name=c["player_name"], mas_kmh=c["mas_kmh"],

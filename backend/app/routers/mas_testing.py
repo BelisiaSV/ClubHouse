@@ -10,20 +10,29 @@ from app.deps import get_current_user, require_module
 from app.models import CalendarEvent as DbCalendarEvent
 from app.models import CalendarEventPlayer as DbCalendarEventPlayer
 from app.models import MasTest, Player, User
+from app.models import RunningGroup as DbRunningGroup
+from app.models import RunningGroupPlayer as DbRunningGroupPlayer
 from app.routers.periodization import load_season_from_db
 from app.schemas_dashboards import (
     CalendarEventSchema,
+    ConfirmRunningGroupsRequest,
     MASTestProtocolSchema,
     PlanNextMasTestRequest,
     RecordMasTestBatchRequest,
     RecordMasTestBatchResponse,
     RecordMasTestRequest,
     RecordMasTestResponse,
+    RunningGroupMemberSchema,
+    RunningGroupSchema,
+    SkippedRunningGroupPlayer,
+    SuggestRunningGroupsRequest,
+    SuggestRunningGroupsResponse,
     TestPlanningResultSchema,
     TrainingZoneSchema,
 )
 from app.services.mas_testing import (
     MAS_TEST_PROTOCOLS,
+    assign_running_groups,
     plan_next_mas_test,
     project_season_mas_test_events,
     recalculate_training_zones,
@@ -244,3 +253,195 @@ def sync_calendar(current_user: User = Depends(get_current_user), db: Session = 
         )
         for ev in events
     ]
+
+
+def _group_training_zones(prescriptie_mas_kmh: float) -> list[TrainingZoneSchema]:
+    return [TrainingZoneSchema.model_validate(z) for z in recalculate_training_zones(prescriptie_mas_kmh)]
+
+
+@router.post("/running-groups/suggest", response_model=SuggestRunningGroupsResponse)
+def suggest_running_groups(
+    payload: SuggestRunningGroupsRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Stelt looptypegroepen voor op basis van elke actieve speler's laatste
+    MAS-score (assign_running_groups) — dit is wat het bevestigingsscherm na
+    een voltooide batch MAS-test toont, VOOR de coach bevestigt/aanpast.
+    Persisteert nog niets; zie POST /running-groups/confirm."""
+    players = db.scalars(
+        select(Player).where(Player.club_id == current_user.club_id, Player.is_active.is_(True))
+    ).all()
+
+    players_mas: list[dict] = []
+    skipped: list[SkippedRunningGroupPlayer] = []
+    player_id_by_name: dict[str, uuid.UUID] = {}
+    for player in players:
+        name = f"{player.first_name} {player.last_name}"
+        latest_mas = db.scalar(
+            select(MasTest).where(MasTest.player_id == player.id).order_by(MasTest.test_date.desc()).limit(1)
+        )
+        if latest_mas is None:
+            skipped.append(
+                SkippedRunningGroupPlayer(player_id=player.id, player_name=name, reason="Geen MAS-test beschikbaar")
+            )
+            continue
+        players_mas.append({"player_name": name, "mas_kmh": float(latest_mas.mas_kmh)})
+        player_id_by_name[name] = player.id
+
+    try:
+        groups = assign_running_groups(players_mas, payload.num_groups)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    mas_by_name = {p["player_name"]: p["mas_kmh"] for p in players_mas}
+    return SuggestRunningGroupsResponse(
+        groups=[
+            RunningGroupSchema(
+                label=g.label,
+                players=[
+                    RunningGroupMemberSchema(
+                        player_id=player_id_by_name[name], player_name=name, mas_kmh=mas_by_name[name]
+                    )
+                    for name in g.players
+                ],
+                prescriptie_mas_kmh=g.prescriptie_mas_kmh,
+                avg_mas_kmh=g.avg_mas_kmh,
+                min_mas_kmh=g.min_mas_kmh,
+                max_mas_kmh=g.max_mas_kmh,
+                training_zones=_group_training_zones(g.prescriptie_mas_kmh),
+            )
+            for g in groups
+        ],
+        skipped=skipped,
+    )
+
+
+@router.post("/running-groups/confirm", response_model=list[RunningGroupSchema])
+def confirm_running_groups(
+    payload: ConfirmRunningGroupsRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Bevestigt (eventueel door de coach aangepaste) looptypegroepen en
+    vervangt de vorige bevestigde groepen van de club volledig — delete-then-
+    recreate, geen diff/merge, net als _sync_mas_test_calendar hierboven.
+    Alle stats (prescriptie/avg/min/max-MAS) worden hier SERVER-SIDE
+    herberekend uit elke speler's laatste MAS-score, nooit vertrouwd van de
+    client."""
+    all_player_ids = [pid for g in payload.groups for pid in g.player_ids]
+    if not all_player_ids:
+        raise HTTPException(status_code=400, detail="Minstens één groep met spelers vereist.")
+    if len(all_player_ids) != len(set(all_player_ids)):
+        raise HTTPException(status_code=400, detail="Een speler kan niet in meer dan één groep tegelijk zitten.")
+
+    players = db.scalars(
+        select(Player).where(Player.club_id == current_user.club_id, Player.id.in_(all_player_ids))
+    ).all()
+    players_by_id = {p.id: p for p in players}
+    missing = set(all_player_ids) - set(players_by_id)
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Onbekende speler(s): {', '.join(str(m) for m in missing)}")
+
+    db.execute(delete(DbRunningGroup).where(DbRunningGroup.club_id == current_user.club_id))
+    db.flush()
+
+    result_groups: list[RunningGroupSchema] = []
+    for g in payload.groups:
+        member_mas: list[tuple[Player, float]] = []
+        for player_id in g.player_ids:
+            player = players_by_id[player_id]
+            latest_mas = db.scalar(
+                select(MasTest).where(MasTest.player_id == player_id).order_by(MasTest.test_date.desc()).limit(1)
+            )
+            if latest_mas is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Geen MAS-test beschikbaar voor {player.first_name} {player.last_name} — "
+                        f"kan groep '{g.label}' niet bevestigen."
+                    ),
+                )
+            member_mas.append((player, float(latest_mas.mas_kmh)))
+
+        mas_values = [mas for _, mas in member_mas]
+        prescriptie = round(min(mas_values), 2)
+        avg_mas = round(sum(mas_values) / len(mas_values), 2)
+        min_mas = round(min(mas_values), 2)
+        max_mas = round(max(mas_values), 2)
+
+        db_group = DbRunningGroup(
+            club_id=current_user.club_id,
+            label=g.label,
+            prescriptie_mas_kmh=prescriptie,
+            avg_mas_kmh=avg_mas,
+            min_mas_kmh=min_mas,
+            max_mas_kmh=max_mas,
+        )
+        db.add(db_group)
+        db.flush()
+        for player, _ in member_mas:
+            db.add(DbRunningGroupPlayer(running_group_id=db_group.id, player_id=player.id))
+
+        result_groups.append(
+            RunningGroupSchema(
+                label=g.label,
+                players=[
+                    RunningGroupMemberSchema(
+                        player_id=player.id, player_name=f"{player.first_name} {player.last_name}", mas_kmh=mas
+                    )
+                    for player, mas in member_mas
+                ],
+                prescriptie_mas_kmh=prescriptie,
+                avg_mas_kmh=avg_mas,
+                min_mas_kmh=min_mas,
+                max_mas_kmh=max_mas,
+                training_zones=_group_training_zones(prescriptie),
+            )
+        )
+
+    db.commit()
+    return result_groups
+
+
+@router.get("/running-groups", response_model=list[RunningGroupSchema])
+def get_running_groups(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """De laatst bevestigde looptypegroepen van de club, elk met de bijhorende
+    groeps-interval-doelen (training_zones) — dit is wat elders gebruikt
+    wordt om intervaldoelen per groep i.p.v. per individuele speler voor te
+    stellen."""
+    db_groups = db.scalars(
+        select(DbRunningGroup)
+        .where(DbRunningGroup.club_id == current_user.club_id)
+        .order_by(DbRunningGroup.created_at)
+    ).all()
+
+    result = []
+    for db_group in db_groups:
+        members = []
+        for gp in db_group.players:
+            player = db.get(Player, gp.player_id)
+            if player is None:
+                continue
+            latest_mas = db.scalar(
+                select(MasTest).where(MasTest.player_id == player.id).order_by(MasTest.test_date.desc()).limit(1)
+            )
+            members.append(
+                RunningGroupMemberSchema(
+                    player_id=player.id,
+                    player_name=f"{player.first_name} {player.last_name}",
+                    mas_kmh=float(latest_mas.mas_kmh) if latest_mas else float(db_group.prescriptie_mas_kmh),
+                )
+            )
+        result.append(
+            RunningGroupSchema(
+                label=db_group.label,
+                players=members,
+                prescriptie_mas_kmh=float(db_group.prescriptie_mas_kmh),
+                avg_mas_kmh=float(db_group.avg_mas_kmh),
+                min_mas_kmh=float(db_group.min_mas_kmh),
+                max_mas_kmh=float(db_group.max_mas_kmh),
+                training_zones=_group_training_zones(float(db_group.prescriptie_mas_kmh)),
+            )
+        )
+    return result

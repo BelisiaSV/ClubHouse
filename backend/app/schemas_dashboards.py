@@ -267,12 +267,59 @@ class RecordMasTestBatchResponse(BaseModel):
     calendar_events_synced: int
 
 
+# ---- looptypegroepen (running groups) ----
+class RunningGroupMemberSchema(BaseModel):
+    player_id: uuid.UUID
+    player_name: str
+    mas_kmh: float
+
+
+class RunningGroupSchema(BaseModel):
+    label: str
+    players: list[RunningGroupMemberSchema]
+    prescriptie_mas_kmh: float
+    avg_mas_kmh: float
+    min_mas_kmh: float
+    max_mas_kmh: float
+    # Interval-doelen VOOR DE GROEP (op basis van prescriptie_mas_kmh, het
+    # veiligheidsanker) i.p.v. per individuele speler.
+    training_zones: list[TrainingZoneSchema]
+
+
+class SkippedRunningGroupPlayer(BaseModel):
+    player_id: uuid.UUID
+    player_name: str
+    reason: str
+
+
+class SuggestRunningGroupsRequest(BaseModel):
+    num_groups: int = Field(default=3, ge=2, le=4)
+
+
+class SuggestRunningGroupsResponse(BaseModel):
+    groups: list[RunningGroupSchema]
+    skipped: list[SkippedRunningGroupPlayer] = Field(default_factory=list)
+
+
+class ConfirmRunningGroupSchema(BaseModel):
+    label: str
+    player_ids: list[uuid.UUID]
+
+
+class ConfirmRunningGroupsRequest(BaseModel):
+    groups: list[ConfirmRunningGroupSchema]
+
+
 # ---- makeup_programs.py router ----
 class MakeupCandidate(BaseModel):
     player_name: str
     mas_kmh: float = Field(gt=0)
     reason: Literal["match_minutes", "training_absence"]
     minutes_played: Optional[int] = Field(default=None, ge=0, le=90)
+    # Verplicht bij reason == 'match_minutes' — nodig voor de km-gebaseerde
+    # inhaaldrempel (qualifies_for_match_makeup_by_km). generate_makeup_schedules()
+    # geeft zelf een duidelijke ValueError als dit ontbreekt.
+    position: Optional[PlayerPosition] = None
     opponent_label: str = ""
     training_date_label: str = ""
 

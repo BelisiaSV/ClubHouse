@@ -8,6 +8,7 @@ import NextTraining from "./pages/NextTraining.jsx";
 import Players from "./pages/Players.jsx";
 import Register from "./pages/Register.jsx";
 import ResetPassword from "./pages/ResetPassword.jsx";
+import Rpe from "./pages/Rpe.jsx";
 import Settings from "./pages/Settings.jsx";
 import Wedstrijden from "./pages/Wedstrijden.jsx";
 
@@ -49,6 +50,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Matches />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/rpe"
+          element={
+            <ProtectedRoute>
+              <Rpe />
             </ProtectedRoute>
           }
         />

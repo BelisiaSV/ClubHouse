@@ -29,6 +29,18 @@ export function SquadIcon(props) {
   );
 }
 
+export function RpeIcon(props) {
+  return (
+    <svg {...base} {...props}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3 12h4l2-5 3 10 2.5-7 1.5 2h5.25M4.318 6.318a4.5 4.5 0 0 1 6.364 0L12 7.636l1.318-1.318a4.5 4.5 0 1 1 6.364 6.364L12 20.364l-7.682-7.682a4.5 4.5 0 0 1 0-6.364Z"
+      />
+    </svg>
+  );
+}
+
 export function CalendarIcon(props) {
   return (
     <svg {...base} {...props}>

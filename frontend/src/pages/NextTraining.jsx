@@ -61,6 +61,22 @@ function SessionProposalCard({ proposal, numPlayers, vormenLibrary, defaultSessi
   const [addReps, setAddReps] = useState("1");
   const [adding, setAdding] = useState(false);
 
+  // Drag-to-reorder blocks: purely visual/local — block order has no effect
+  // on km/duration totals (the summary is a sum, order-independent), so this
+  // never triggers a recalc() call, just reshuffles composition.blocks.
+  const [dragIndex, setDragIndex] = useState(null);
+
+  const handleReorderBlocks = (fromIndex, toIndex) => {
+    setDragIndex(null);
+    if (fromIndex == null || fromIndex === toIndex) return;
+    setComposition((c) => {
+      const newBlocks = [...c.blocks];
+      const [moved] = newBlocks.splice(fromIndex, 1);
+      newBlocks.splice(toIndex, 0, moved);
+      return { ...c, blocks: newBlocks };
+    });
+  };
+
   const [sessionDate, setSessionDate] = useState(defaultSessionDate);
   const [finalizing, setFinalizing] = useState(false);
   const [finalizeError, setFinalizeError] = useState(null);
@@ -222,6 +238,7 @@ function SessionProposalCard({ proposal, numPlayers, vormenLibrary, defaultSessi
                 <table className="w-full text-sm text-left text-gray-300 min-w-[560px]">
                   <thead>
                     <tr className="text-[10px] uppercase tracking-wider text-gray-500 border-b border-white/10">
+                      <th className="px-2 py-2 font-medium w-6"></th>
                       <th className="px-3 py-2 font-medium">Vorm</th>
                       <th className="px-3 py-2 font-medium">Opzet</th>
                       <th className="px-3 py-2 font-medium">
@@ -242,7 +259,23 @@ function SessionProposalCard({ proposal, numPlayers, vormenLibrary, defaultSessi
                       // completely different block instead of remounting it.
                       const occurrence = arr.slice(0, i).filter((x) => x.vorm === b.vorm).length;
                       return (
-                        <tr key={`${b.vorm}__${occurrence}`} className={`border-b border-white/5 last:border-b-0 ${skipped ? "opacity-40" : ""}`}>
+                        <tr
+                          key={`${b.vorm}__${occurrence}`}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={() => handleReorderBlocks(dragIndex, i)}
+                          className={`border-b border-white/5 last:border-b-0 ${skipped ? "opacity-40" : ""} ${
+                            dragIndex === i ? "opacity-30" : ""
+                          }`}
+                        >
+                          <td
+                            draggable
+                            onDragStart={() => setDragIndex(i)}
+                            onDragEnd={() => setDragIndex(null)}
+                            title="Sleep om te herschikken"
+                            className="px-2 py-2 text-gray-600 hover:text-gray-300 cursor-grab active:cursor-grabbing select-none"
+                          >
+                            ⠿
+                          </td>
                           <td className="px-3 py-2 font-medium text-white">{b.label}</td>
                           <td className="px-3 py-2 text-xs text-gray-400">{b.format_hint || "—"}</td>
                           <td className="px-3 py-2">

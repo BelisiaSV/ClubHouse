@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { createMatch, generateForMatch, getMatchPlayers, listMatches, updateMatchPlayer } from "../api/client";
 
-const THRESHOLD_MIN = 60;
 const MINUTE_OPTIONS = Array.from({ length: 91 }, (_, i) => i);
 
 const STATUS_LABELS = {
@@ -119,7 +118,7 @@ export default function Wedstrijden() {
   // without needing an artificial debounce timer.
   const handleStatusChange = (row, newStatus) => {
     setRows((rs) => rs.map((r) => (r.player_id === row.player_id ? { ...r, selection_status: newStatus } : r)));
-    savePlayerRow(row.player_id, { selection_status: newStatus });
+    savePlayerRow(row.player_id, { selection_status: newStatus, position: row.position });
   };
 
   const handleMinutesChange = (row, newMinutes) => {
@@ -127,15 +126,17 @@ export default function Wedstrijden() {
     setRows((rs) =>
       rs.map((r) => (r.player_id === row.player_id ? { ...r, minutes_played: minutes ?? r.minutes_played } : r))
     );
-    savePlayerRow(row.player_id, { selection_status: row.selection_status, minutes_played: minutes });
+    savePlayerRow(row.player_id, {
+      selection_status: row.selection_status,
+      minutes_played: minutes,
+      position: row.position,
+    });
   };
 
   const retryRow = (row) => {
     const pending = rowSaveState[row.player_id]?.pending;
     if (pending) savePlayerRow(row.player_id, pending);
   };
-
-  const eligibleCount = rows.filter((r) => r.minutes_played < THRESHOLD_MIN).length;
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -242,7 +243,7 @@ export default function Wedstrijden() {
             </select>
             {!rowsLoading && !rowsError && (
               <span className="text-sm text-gray-500">
-                {eligibleCount} speler(s) komen in aanmerking (drempel {THRESHOLD_MIN}')
+                Wie in aanmerking komt voor een inhaalschema wordt per positie bepaald bij het genereren.
               </span>
             )}
           </div>
@@ -259,14 +260,13 @@ export default function Wedstrijden() {
                     <th className="px-4 py-3 font-medium">Status</th>
                     <th className="px-4 py-3 font-medium">Minuten (override)</th>
                     <th className="px-4 py-3 font-medium">MAS</th>
-                    <th className="px-4 py-3 font-medium">Compensatie</th>
+                    <th className="px-4 py-3 font-medium">Positie</th>
                     <th className="px-4 py-3 font-medium"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((r) => {
                     const save = rowSaveState[r.player_id];
-                    const eligible = r.minutes_played < THRESHOLD_MIN;
                     return (
                       <tr key={r.player_id} className="border-b border-white/5 last:border-b-0 hover:bg-white/[0.03] transition-colors">
                         <td className="px-4 py-3">
@@ -304,14 +304,8 @@ export default function Wedstrijden() {
                         <td className="px-4 py-3 text-gray-400">
                           {r.mas_kmh != null ? `${r.mas_kmh} km/u` : "—"}
                         </td>
-                        <td className="px-4 py-3">
-                          {eligible ? (
-                            <span className="inline-flex text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-400">
-                              In aanmerking
-                            </span>
-                          ) : (
-                            <span className="text-xs text-gray-500">{r.minutes_played}' gespeeld</span>
-                          )}
+                        <td className="px-4 py-3 text-gray-400">
+                          {r.position ?? "—"}
                         </td>
                         <td className="px-4 py-3 w-16">
                           {save?.state === "saving" && <span className="text-xs text-gray-500">Bezig…</span>}
@@ -346,7 +340,7 @@ export default function Wedstrijden() {
               </span>
               <button
                 onClick={handleGenerate}
-                disabled={generating || eligibleCount === 0}
+                disabled={generating || rows.length === 0}
                 style={{ backgroundColor: "#D9A441" }}
                 className="text-white px-4 py-2 rounded-md text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
               >

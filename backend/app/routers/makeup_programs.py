@@ -102,7 +102,12 @@ def generate_for_match(
         existing = minutes_rows.get(player.id)
         minutes_played = existing.minutes_played if existing else DEFAULT_MINUTES_BY_STATUS["basis"]
 
-        if player.position is None:
+        # Positie TIJDENS deze wedstrijd (match_minutes.position_played,
+        # meegestuurd door de Wedstrijden-tab) heeft voorrang op de huidige
+        # profielpositie — een latere positiewijziging op het spelersprofiel
+        # mag deze wedstrijd niet retroactief anders beoordelen.
+        raw_position = (existing.position_played if existing and existing.position_played else None) or player.position
+        if raw_position is None:
             # Zonder positie kan de km-gebaseerde inhaaldrempel
             # (qualifies_for_match_makeup_by_km) niet bepaald worden — deze
             # speler wordt overgeslagen i.p.v. de hele batch te laten falen.
@@ -113,7 +118,7 @@ def generate_for_match(
                 )
             )
             continue
-        position = ServicePlayerPosition(player.position.value)
+        position = ServicePlayerPosition(raw_position.value)
 
         if not qualifies_for_match_makeup_by_km(position, minutes_played):
             continue

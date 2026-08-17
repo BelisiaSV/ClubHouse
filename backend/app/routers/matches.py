@@ -216,6 +216,7 @@ def get_match_players(
                 mas_kmh=float(latest_mas.mas_kmh) if latest_mas else None,
                 selection_status=existing.selection_status if existing else "basis",
                 minutes_played=existing.minutes_played if existing else DEFAULT_MINUTES_BY_STATUS["basis"],
+                position=(existing.position_played if existing and existing.position_played else player.position),
             )
         )
     return rows
@@ -239,6 +240,10 @@ def update_match_player(
     if minutes_played is None:
         minutes_played = DEFAULT_MINUTES_BY_STATUS[payload.selection_status]
 
+    # Snapshot van de positie TIJDENS deze wedstrijd — als de Wedstrijden-tab
+    # er geen meestuurt, valt terug op de speler's huidige profielpositie.
+    position_played = payload.position or player.position
+
     row = db.scalar(
         select(MatchMinutes).where(MatchMinutes.match_id == match_id, MatchMinutes.player_id == player_id)
     )
@@ -250,12 +255,14 @@ def update_match_player(
             selection_status=payload.selection_status,
             minutes_played=minutes_played,
             started_match=payload.selection_status == "basis",
+            position_played=position_played,
         )
         db.add(row)
     else:
         row.selection_status = payload.selection_status
         row.minutes_played = minutes_played
         row.started_match = payload.selection_status == "basis"
+        row.position_played = position_played
 
     # Background step, per calculate_player_match_distance() /
     # populate_match_distance_for_week(): auto-fills this player's estimated
@@ -276,4 +283,5 @@ def update_match_player(
         mas_kmh=float(latest_mas.mas_kmh) if latest_mas else None,
         selection_status=row.selection_status,
         minutes_played=row.minutes_played,
+        position=row.position_played,
     )

@@ -151,6 +151,18 @@ export const getCalendarEvents = (eventType) =>
     .get("/api/calendar/events", { params: eventType ? { event_type: eventType } : {} })
     .then((res) => res.data);
 
+// ---- MAS testing: looptypegroepen (running groups) ----
+export const suggestRunningGroups = (numGroups) =>
+  client
+    .post("/api/mas-testing/running-groups/suggest", { num_groups: numGroups })
+    .then((res) => res.data);
+
+export const confirmRunningGroups = (groups) =>
+  client.post("/api/mas-testing/running-groups/confirm", { groups }).then((res) => res.data);
+
+export const getRunningGroups = () =>
+  client.get("/api/mas-testing/running-groups").then((res) => res.data);
+
 // ---- RPE / wellness ----
 export const getRpeWellnessShouldPrompt = (date) =>
   client.get("/api/rpe-wellness/should-prompt", { params: date ? { date } : {} }).then((res) => res.data);

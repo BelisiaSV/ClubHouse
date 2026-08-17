@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  confirmRunningGroups,
   createMatch,
   getCalendarEvents,
   getCurrentCycles,
   getKmOverview,
   getMasTestProtocols,
   getMinutesAdvice,
+  getRunningGroups,
   listMatches,
   listPlayers,
   recordMasTestBatch,
+  suggestRunningGroups,
   syncMasTestCalendar,
 } from "../api/client";
 
@@ -92,10 +95,13 @@ export default function Matches() {
   const [playersById, setPlayersById] = useState({});
   const [protocols, setProtocols] = useState([]);
 
-  // Two-step MAS-test batch flow, opened from an "Aankomende MAS-testen"
-  // entry below: step 'protocol' shows the protocol cards (stap A), step
-  // 'batch' shows the whole-squad result entry (stap B). null = closed.
+  // Three-step MAS-test flow, opened from an "Aankomende MAS-testen" entry
+  // below: step 'protocol' shows the protocol cards (stap A), step 'batch'
+  // shows the whole-squad result entry (stap B), step 'groups' shows the
+  // suggested looptypegroepen (stap C, after a successful batch save) for
+  // the coach to confirm/adjust. null = closed.
   const [masModal, setMasModal] = useState(null);
+  const [runningGroups, setRunningGroups] = useState([]);
 
   const [cycles, setCycles] = useState({ active: null, queued: null });
   const [kmOverview, setKmOverview] = useState([]);
@@ -145,6 +151,9 @@ export default function Matches() {
     getMinutesAdvice()
       .then(setMinutesAdvice)
       .catch(() => {});
+    getRunningGroups()
+      .then(setRunningGroups)
+      .catch(() => {});
   }, []);
 
   const refreshMasTestEvents = () => getCalendarEvents("mas_test").then(setMasTestEvents).catch(() => {});
@@ -193,6 +202,58 @@ export default function Matches() {
       refreshMasTestEvents();
     } catch (err) {
       setMasModal((m) => ({ ...m, saving: false, error: err.response?.data?.detail ?? err.message }));
+    }
+  };
+
+  const openGroupsStep = async () => {
+    setMasModal((m) => ({
+      ...m,
+      step: "groups",
+      groupsLoading: true,
+      groupsError: null,
+      groupSuggestion: null,
+      groupAssignment: null,
+      groupsConfirmed: null,
+    }));
+    try {
+      const suggestion = await suggestRunningGroups(3);
+      const playersMasById = Object.fromEntries(
+        suggestion.groups.flatMap((g) => g.players.map((p) => [p.player_id, p]))
+      );
+      const assignment = suggestion.groups.map((g) => ({
+        label: g.label,
+        playerIds: g.players.map((p) => p.player_id),
+      }));
+      setMasModal((m) => ({ ...m, groupsLoading: false, groupSuggestion: suggestion, groupAssignment: assignment, playersMasById }));
+    } catch (err) {
+      setMasModal((m) => ({ ...m, groupsLoading: false, groupsError: err.response?.data?.detail ?? err.message }));
+    }
+  };
+
+  const moveGroupPlayer = (playerId, toLabel) => {
+    setMasModal((m) => ({
+      ...m,
+      groupAssignment: m.groupAssignment.map((g) => ({
+        ...g,
+        playerIds:
+          g.label === toLabel
+            ? g.playerIds.includes(playerId)
+              ? g.playerIds
+              : [...g.playerIds, playerId]
+            : g.playerIds.filter((id) => id !== playerId),
+      })),
+    }));
+  };
+
+  const confirmGroups = async () => {
+    setMasModal((m) => ({ ...m, groupsConfirming: true, groupsError: null }));
+    try {
+      const payload = masModal.groupAssignment.map((g) => ({ label: g.label, player_ids: g.playerIds }));
+      const confirmed = await confirmRunningGroups(payload);
+      setMasModal((m) => ({ ...m, groupsConfirming: false, groupsConfirmed: confirmed }));
+      setRunningGroups(confirmed);
+    } catch (err) {
+      setMasModal((m) => ({ ...m, groupsConfirming: false, groupsError: err.response?.data?.detail ?? err.message }));
     }
   };
 
@@ -492,6 +553,34 @@ export default function Matches() {
         </div>
       )}
 
+      {runningGroups.length > 0 && (
+        <div className="bg-gray-900/60 border border-white/10 rounded-2xl p-6 shadow-xl shadow-black/20">
+          <h2 className="text-white font-semibold mb-1">Looptypegroepen</h2>
+          <p className="text-sm text-gray-400 mb-3">
+            Laatst bevestigde indeling — intervaldoelen worden per groep voorgesteld, niet per
+            individuele speler. Voorschrift-anker is telkens de laagste MAS binnen de groep.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {runningGroups.map((g) => (
+              <div key={g.label} className="bg-gray-950/60 border border-white/10 rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-white font-medium text-sm">{g.label}</p>
+                  <span className="text-xs text-gray-500">{g.prescriptie_mas_kmh} km/u</span>
+                </div>
+                <p className="text-xs text-gray-400">{g.players.map((p) => p.player_name).join(", ")}</p>
+                <ul className="text-xs text-gray-500 space-y-0.5">
+                  {g.training_zones.map((z) => (
+                    <li key={z.name}>
+                      {z.name}: {z.speed_low_kmh}–{z.speed_high_kmh} km/u
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {masTestEvents.length > 0 && (
         <div className="bg-gray-900/60 border border-white/10 rounded-2xl p-6 shadow-xl shadow-black/20">
           <h2 className="text-white font-semibold mb-1">Aankomende MAS-testen</h2>
@@ -570,7 +659,9 @@ export default function Matches() {
                 <h3 className="text-white font-semibold text-lg">MAS-test</h3>
                 <p className="text-xs text-gray-500">
                   {new Date(masModal.event.event_date).toLocaleDateString("nl-BE")} ·{" "}
-                  {masModal.step === "protocol" ? "stap 1: protocol kiezen" : "stap 2: resultaten invullen"}
+                  {masModal.step === "protocol" && "stap 1: protocol kiezen"}
+                  {masModal.step === "batch" && "stap 2: resultaten invullen"}
+                  {masModal.step === "groups" && "stap 3: looptypegroepen bevestigen"}
                 </p>
               </div>
               <button onClick={closeMasModal} className="text-gray-400 hover:text-white text-sm">
@@ -675,16 +766,106 @@ export default function Matches() {
                         </div>
                       )}
 
-                      <button
-                        onClick={saveMasBatch}
-                        disabled={masModal.saving}
-                        className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium w-full disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {masModal.saving ? "Bezig…" : "Opslaan voor volledige groep"}
-                      </button>
+                      {masModal.saveResult ? (
+                        <button
+                          onClick={openGroupsStep}
+                          className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium w-full"
+                        >
+                          Verder naar looptypegroepen →
+                        </button>
+                      ) : (
+                        <button
+                          onClick={saveMasBatch}
+                          disabled={masModal.saving}
+                          className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium w-full disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {masModal.saving ? "Bezig…" : "Opslaan voor volledige groep"}
+                        </button>
+                      )}
                     </>
                   );
                 })()}
+              </>
+            )}
+
+            {masModal.step === "groups" && (
+              <>
+                {masModal.groupsLoading && <p className="text-gray-400 text-sm">Groepen voorstellen…</p>}
+                {masModal.groupsError && <p className="text-red-400 text-sm">{masModal.groupsError}</p>}
+
+                {!masModal.groupsLoading && masModal.groupAssignment && !masModal.groupsConfirmed && (
+                  <>
+                    <p className="text-xs text-gray-400 leading-relaxed">
+                      Voorstel op basis van de laatste MAS-score van elke speler — de laagste MAS binnen
+                      een groep is het veilige voorschriftanker. Verplaats een speler naar een andere
+                      groep indien nodig en bevestig.
+                    </p>
+                    {masModal.groupSuggestion?.skipped?.length > 0 && (
+                      <p className="text-amber-400 text-xs">
+                        Overgeslagen (geen MAS-test): {masModal.groupSuggestion.skipped.map((s) => s.player_name).join(", ")}
+                      </p>
+                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {masModal.groupAssignment.map((g) => {
+                        const masValues = g.playerIds.map((id) => masModal.playersMasById[id]?.mas_kmh).filter((v) => v != null);
+                        const prescriptie = masValues.length > 0 ? Math.min(...masValues).toFixed(2) : "—";
+                        return (
+                          <div key={g.label} className="bg-gray-950/60 border border-white/10 rounded-xl p-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-white font-medium text-sm">{g.label}</p>
+                              <span className="text-xs text-gray-500">{prescriptie} km/u</span>
+                            </div>
+                            <ul className="space-y-1.5">
+                              {g.playerIds.map((id) => {
+                                const p = masModal.playersMasById[id];
+                                return (
+                                  <li key={id} className="flex items-center justify-between gap-2 text-xs">
+                                    <span className="text-gray-300 truncate">
+                                      {p?.player_name ?? playerLabel(id)}{" "}
+                                      <span className="text-gray-500">{p?.mas_kmh?.toFixed(1)}</span>
+                                    </span>
+                                    <select
+                                      value={g.label}
+                                      onChange={(e) => moveGroupPlayer(id, e.target.value)}
+                                      className="bg-gray-900 text-white rounded-md px-1.5 py-1 text-[10px] border border-gray-700 shrink-0"
+                                    >
+                                      {masModal.groupAssignment.map((opt) => (
+                                        <option key={opt.label} value={opt.label}>
+                                          {opt.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </li>
+                                );
+                              })}
+                              {g.playerIds.length === 0 && <li className="text-gray-600 text-xs italic">Geen spelers</li>}
+                            </ul>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <button
+                      onClick={confirmGroups}
+                      disabled={masModal.groupsConfirming}
+                      className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium w-full disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {masModal.groupsConfirming ? "Bezig…" : "Bevestig looptypegroepen"}
+                    </button>
+                  </>
+                )}
+
+                {masModal.groupsConfirmed && (
+                  <div className="space-y-2">
+                    <p className="text-emerald-400 text-sm">Looptypegroepen bevestigd.</p>
+                    <button
+                      onClick={closeMasModal}
+                      className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium w-full"
+                    >
+                      Sluiten
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </div>

@@ -290,7 +290,7 @@ def suggest_running_groups(
         player_id_by_name[name] = player.id
 
     try:
-        groups = assign_running_groups(players_mas, payload.num_groups)
+        result = assign_running_groups(players_mas, payload.num_groups)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -311,9 +311,10 @@ def suggest_running_groups(
                 max_mas_kmh=g.max_mas_kmh,
                 training_zones=_group_training_zones(g.prescriptie_mas_kmh),
             )
-            for g in groups
+            for g in result["groups"]
         ],
         skipped=skipped,
+        note=result["note"],
     )
 
 

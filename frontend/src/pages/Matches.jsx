@@ -797,9 +797,15 @@ export default function Matches() {
                   <>
                     <p className="text-xs text-gray-400 leading-relaxed">
                       Voorstel op basis van de laatste MAS-score van elke speler — de laagste MAS binnen
-                      een groep is het veilige voorschriftanker. Verplaats een speler naar een andere
-                      groep indien nodig en bevestig.
+                      een groep is het veilige voorschriftanker. Groepen kunnen ongelijk groot zijn: de
+                      indeling volgt de natuurlijke kloven in de MAS-scores, niet een vaste groepsgrootte.
+                      Verplaats een speler naar een andere groep indien nodig en bevestig.
                     </p>
+                    {masModal.groupSuggestion?.note && (
+                      <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 rounded-xl px-4 py-3 text-xs leading-relaxed">
+                        {masModal.groupSuggestion.note}
+                      </div>
+                    )}
                     {masModal.groupSuggestion?.skipped?.length > 0 && (
                       <p className="text-amber-400 text-xs">
                         Overgeslagen (geen MAS-test): {masModal.groupSuggestion.skipped.map((s) => s.player_name).join(", ")}

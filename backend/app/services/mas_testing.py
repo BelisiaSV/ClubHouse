@@ -216,6 +216,9 @@ DEFAULT_RUN_GROUP_LABELS = {
     3: ["De Motoren", "De Hybrides", "De Diesels"],
     4: ["De Motoren", "De Sportwagens", "De Hybrides", "De Diesels"],
 }
+MIN_SPREAD_FOR_GROUPING_KMH = 1.0   # onder dit verschil (snelste-traagste): geen opdeling zinvol
+GAP_SIGNIFICANCE_FACTOR = 1.5       # een kloof moet minstens 1,5x de gemiddelde afstand zijn
+                                     # om als 'echte' groepsgrens te tellen, niet toeval
 
 
 @dataclass
@@ -229,17 +232,26 @@ class RunningGroup:
 
 
 def assign_running_groups(players_mas: list, num_groups: int = 3,
-                           group_labels: Optional[list] = None) -> list:
+                           group_labels: Optional[list] = None) -> dict:
     """
-    Verdeelt spelers in 'num_groups' looptypegroepen op basis van hun MAS-
-    score (hoogste MAS eerst), en levert per groep een prescriptie-MAS.
+    Verdeelt spelers in looptypegroepen op basis van NATUURLIJKE CLUSTERS
+    in hun MAS-scores — niet op een vast aantal spelers per groep. Zoekt
+    de grootste kloven (verschillen) in de gesorteerde MAS-reeks en knipt
+    daar, in plaats van de kern gewoon in even grote stukken te delen.
 
-    BELANGRIJKE KEUZE: de prescriptie-MAS is de LAAGSTE score binnen de
-    groep, niet het gemiddelde — net als bij de droge-loopvorm-aanvulling
-    wordt bewust de meest voorzichtige waarde gebruikt, zodat de traagste
-    speler in elke groep niet structureel overvraagd wordt. De coach kan
-    dit desgewenst zelf optrekken richting het gemiddelde voor groepen met
-    weinig spreiding.
+    WAAROM: bij een kern die dicht bij elkaar zit (vaak het geval — een
+    kern is zelden willekeurig verspreid over de hele MAS-schaal) kan een
+    vaste-groepsgrootte-verdeling twee spelers met bijna identieke MAS in
+    verschillende groepen duwen, puur omdat ze net aan weerszijden van de
+    rangschikkingsgrens vallen. Kloofgebaseerd groeperen voorkomt dat.
+
+    Praktisch gevolg: de groepen zijn NIET noodzakelijk even groot — dat
+    is net de bedoeling, het weerspiegelt de werkelijke spreiding in de
+    kern in plaats van een opgelegde verdeling.
+
+    Geeft een dict terug met 'groups' (list[RunningGroup]) en 'note'
+    (str, gevuld als de kern te weinig spreiding heeft voor het gevraagde
+    aantal groepen — dan wordt automatisch met minder groepen gewerkt).
 
     players_mas: [{'player_name': str, 'mas_kmh': float}, ...]
     """
@@ -248,23 +260,58 @@ def assign_running_groups(players_mas: list, num_groups: int = 3,
     if len(players_mas) < num_groups:
         raise ValueError(f"Te weinig spelers ({len(players_mas)}) voor {num_groups} groepen.")
 
-    labels = group_labels or DEFAULT_RUN_GROUP_LABELS.get(
-        num_groups, [f"Groep {i + 1}" for i in range(num_groups)]
-    )
-    if len(labels) != num_groups:
-        raise ValueError(f"Aantal labels ({len(labels)}) moet gelijk zijn aan num_groups ({num_groups}).")
-
     sorted_players = sorted(players_mas, key=lambda p: p["mas_kmh"], reverse=True)
+    values = [p["mas_kmh"] for p in sorted_players]
 
-    # Verdeel zo gelijk mogelijk over de groepen (laatste groepen krijgen
-    # evt. één speler minder bij een niet-deelbaar aantal).
-    base_size, remainder = divmod(len(sorted_players), num_groups)
+    # Is de volledige spreiding van de kern te klein om zinvol op te delen?
+    total_spread = values[0] - values[-1]
+    if total_spread < MIN_SPREAD_FOR_GROUPING_KMH:
+        note = (f"Spreiding in de kern is klein ({round(total_spread, 2)} km/u tussen snelste en "
+                f"traagste) — de hele kern traint samen op één prescriptie-MAS in plaats van "
+                f"kunstmatig op te delen.")
+        mas_values = values
+        group = RunningGroup(
+            label=(group_labels[0] if group_labels else "Volledige kern"),
+            players=[p["player_name"] for p in sorted_players],
+            prescriptie_mas_kmh=round(min(mas_values), 2),
+            avg_mas_kmh=round(sum(mas_values) / len(mas_values), 2),
+            min_mas_kmh=round(min(mas_values), 2), max_mas_kmh=round(max(mas_values), 2),
+        )
+        return {"groups": [group], "note": note}
+
+    # Bereken alle opeenvolgende kloven (dalend gesorteerd, dus altijd >= 0)
+    gaps = [(values[i] - values[i + 1], i) for i in range(len(values) - 1)]
+    # Een kloof telt enkel als 'echt' als hij duidelijk groter is dan de
+    # GEMIDDELDE afstand tussen spelers in deze kern — anders kiest het
+    # algoritme gewoon de grootste van een reeks bijna-gelijke kloofjes,
+    # wat een scheve, kunstmatige indeling zou geven bij een kern die
+    # eigenlijk vrij homogeen is.
+    avg_gap = total_spread / (len(values) - 1)
+    meaningful_gaps = [g for g in gaps if g[0] > GAP_SIGNIFICANCE_FACTOR * avg_gap]
+
+    note = ""
+    effective_num_groups = num_groups
+    if len(meaningful_gaps) < num_groups - 1:
+        effective_num_groups = len(meaningful_gaps) + 1
+        note = (f"De kern heeft weinig spreiding in MAS — automatisch teruggeschaald van "
+                f"{num_groups} naar {effective_num_groups} groep(en), want er zijn niet genoeg "
+                f"natuurlijke kloven om {num_groups} zinvol te onderscheiden groepen te vormen.")
+
+    # Kies de (effective_num_groups - 1) grootste kloven als knippunten
+    split_indices = sorted(
+        idx for _, idx in sorted(meaningful_gaps, key=lambda g: g[0], reverse=True)[:effective_num_groups - 1]
+    )
+
+    labels = group_labels or DEFAULT_RUN_GROUP_LABELS.get(
+        effective_num_groups, [f"Groep {i + 1}" for i in range(effective_num_groups)]
+    )
+    if len(labels) != effective_num_groups:
+        labels = [f"Groep {i + 1}" for i in range(effective_num_groups)]
+
     groups = []
-    cursor = 0
-    for i in range(num_groups):
-        size = base_size + (1 if i < remainder else 0)
-        chunk = sorted_players[cursor:cursor + size]
-        cursor += size
+    start = 0
+    for i, split_idx in enumerate(split_indices + [len(sorted_players) - 1]):
+        chunk = sorted_players[start:split_idx + 1]
         mas_values = [p["mas_kmh"] for p in chunk]
         groups.append(RunningGroup(
             label=labels[i], players=[p["player_name"] for p in chunk],
@@ -272,7 +319,9 @@ def assign_running_groups(players_mas: list, num_groups: int = 3,
             avg_mas_kmh=round(sum(mas_values) / len(mas_values), 2),
             min_mas_kmh=round(min(mas_values), 2), max_mas_kmh=round(max(mas_values), 2),
         ))
-    return groups
+        start = split_idx + 1
+
+    return {"groups": groups, "note": note}
 
 
 # --- 2.5 MAS-TESTPROTOCOLLEN: bibliotheek waaruit de trainer kiest --------

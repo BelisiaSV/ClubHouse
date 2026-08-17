@@ -299,6 +299,10 @@ class SuggestRunningGroupsRequest(BaseModel):
 class SuggestRunningGroupsResponse(BaseModel):
     groups: list[RunningGroupSchema]
     skipped: list[SkippedRunningGroupPlayer] = Field(default_factory=list)
+    # Gevuld wanneer assign_running_groups() automatisch heeft teruggeschaald
+    # naar minder groepen dan gevraagd (te weinig spreiding in de kern) — dit
+    # is relevante info voor de coach, geen foutmelding om te verbergen.
+    note: str = ""
 
 
 class ConfirmRunningGroupSchema(BaseModel):

@@ -652,3 +652,27 @@ class WeeklyKmPlanSchema(BaseModel):
     training_distance_km: float
     km_per_training: float
     note: str
+
+
+# ---- dashboard_widgets.py router: personal dashboard layout ----
+class DashboardWidgetSchema(BaseModel):
+    key: str
+    label: str
+    description: str
+    requires_module: Optional[str] = None
+    default_enabled: bool
+
+
+class DashboardPreferencesSchema(BaseModel):
+    # Ordered — array order IS the layout order.
+    enabled_widgets: list[str]
+
+
+class ToggleDashboardWidgetRequest(BaseModel):
+    widget_key: str
+    enabled: bool
+    position: Optional[int] = None
+
+
+class ReorderDashboardWidgetsRequest(BaseModel):
+    new_order: list[str]

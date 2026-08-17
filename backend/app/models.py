@@ -658,3 +658,22 @@ class ClubModule(Base):
     __table_args__ = (
         UniqueConstraint("club_id", "module_key", name="club_modules_club_id_module_key_key"),
     )
+
+
+class CoachDashboardPreferences(Base):
+    """Mirrors services.platform_admin.CoachDashboardPreferences — one row
+    per coach (per user, not per club: two coaches at the same club may
+    each want a different dashboard layout). enabled_widgets is an ORDERED
+    array of DashboardWidgetKey values; array order IS the layout order,
+    same convention as CycleWeek ordering elsewhere in this codebase. No
+    club_id column, following the same per-user (not per-club) pattern as
+    PasswordResetToken — the owning club is always reachable via user_id."""
+
+    __tablename__ = "coach_dashboard_preferences"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    enabled_widgets: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default=text("'{}'"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))

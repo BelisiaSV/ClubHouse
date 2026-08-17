@@ -3,15 +3,37 @@ import { Link } from "react-router-dom";
 import {
   deleteSession,
   finalizeSession,
+  getAvailableDashboardWidgets,
+  getCalendarEvents,
   getCompositionProposal,
+  getCurrentCycles,
+  getCurrentMasResults,
+  getDashboardPreferences,
   getNextTrainingOverview,
   getRecentSessions,
   getSessionDetail,
   getVormenLibrary,
   getVormTarget,
+  listMatches,
   proposeWeek,
   recalculateComposition,
+  reorderDashboardWidgets,
+  toggleDashboardWidget,
 } from "../api/client";
+
+const WIDGET_SIZE = {
+  squad_count: "small",
+  attention_players: "small",
+  sessions_this_week: "small",
+  next_session: "small",
+  next_match: "small",
+  upcoming_mas_test: "small",
+  cycle_week_status: "small",
+  make_schedules_shortcut: "small",
+  current_mas_results: "full",
+  recent_sessions: "full",
+  next_training_builder: "full",
+};
 
 const FOCUS_LABELS = {
   accumulation: "Accumulatie",
@@ -384,6 +406,25 @@ function SessionProposalCard({ proposal, numPlayers, vormenLibrary, defaultSessi
   );
 }
 
+function currentCycleWeekLabel(cycles) {
+  const cycle = cycles?.active;
+  if (!cycle) return null;
+  const today = new Date();
+  const cycleStart = new Date(`${cycle.start_date}T00:00:00`);
+  const cycleEnd = new Date(cycleStart);
+  cycleEnd.setDate(cycleEnd.getDate() + cycle.length_weeks * 7);
+  if (today < cycleStart || today >= cycleEnd) return null;
+  for (let i = 0; i < cycle.weeks.length; i++) {
+    const weekStart = new Date(`${cycle.weeks[i].week_start_date}T00:00:00`);
+    const weekEnd =
+      i + 1 < cycle.weeks.length ? new Date(`${cycle.weeks[i + 1].week_start_date}T00:00:00`) : cycleEnd;
+    if (today >= weekStart && today < weekEnd) {
+      return { cycleName: cycle.name, weekNumber: cycle.weeks[i].week_number, focus: cycle.weeks[i].focus };
+    }
+  }
+  return null;
+}
+
 export default function NextTraining() {
   const compositionRef = useRef(null);
 
@@ -407,6 +448,27 @@ export default function NextTraining() {
   const [weekProposals, setWeekProposals] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [weekError, setWeekError] = useState(null);
+
+  // Extra data sources feeding widgets that don't map onto the overview
+  // payload — next_match, current_mas_results, upcoming_mas_test and
+  // cycle_week_status each need their own fetch, all reusing endpoints
+  // already used elsewhere (Kalender/Wedstrijden tabs).
+  const [matches, setMatches] = useState([]);
+  const [cycles, setCycles] = useState({ active: null, queued: null });
+  const [masResults, setMasResults] = useState([]);
+  const [masTestEvents, setMasTestEvents] = useState([]);
+
+  // Personal dashboard layout (services.platform_admin.CoachDashboardPreferences).
+  const [availableWidgets, setAvailableWidgets] = useState([]);
+  const [enabledWidgets, setEnabledWidgets] = useState([]);
+  const [widgetsError, setWidgetsError] = useState(null);
+  const [showWidgetPicker, setShowWidgetPicker] = useState(false);
+  const [dragWidgetIndex, setDragWidgetIndex] = useState(null);
+  // Bumped on every toggle/reorder so the initial preferences fetch (which
+  // can resolve AFTER a quick toggle — StrictMode's dev-mode double-mount
+  // makes this easy to hit, but real network jitter can too) knows its
+  // result is stale and skips overwriting enabledWidgets with old data.
+  const widgetsGenerationRef = useRef(0);
 
   const loadOverview = () => {
     setOverviewLoading(true);
@@ -437,10 +499,59 @@ export default function NextTraining() {
     getVormenLibrary()
       .then(setVormenLibrary)
       .catch(() => {});
+    listMatches()
+      .then(setMatches)
+      .catch(() => {});
+    getCurrentCycles()
+      .then(setCycles)
+      .catch(() => {});
+    getCurrentMasResults()
+      .then(setMasResults)
+      .catch(() => {});
+    getCalendarEvents("mas_test")
+      .then(setMasTestEvents)
+      .catch(() => {});
+    const generation = widgetsGenerationRef.current;
+    Promise.all([getAvailableDashboardWidgets(), getDashboardPreferences()])
+      .then(([avail, prefs]) => {
+        setAvailableWidgets(avail);
+        if (widgetsGenerationRef.current === generation) {
+          setEnabledWidgets(prefs.enabled_widgets);
+        }
+        setWidgetsError(null);
+      })
+      .catch((err) => setWidgetsError(err.response?.data?.detail ?? err.message));
   }, []);
 
   const scrollToComposition = () => {
     compositionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handleToggleWidget = async (widgetKey, enabled) => {
+    widgetsGenerationRef.current += 1;
+    setEnabledWidgets((prev) => (enabled ? [...prev, widgetKey] : prev.filter((k) => k !== widgetKey)));
+    try {
+      const result = await toggleDashboardWidget(widgetKey, enabled);
+      widgetsGenerationRef.current += 1;
+      setEnabledWidgets(result.enabled_widgets);
+    } catch (err) {
+      setWidgetsError(err.response?.data?.detail ?? err.message);
+    }
+  };
+
+  const handleReorderWidget = async (fromIndex, toIndex) => {
+    setDragWidgetIndex(null);
+    if (fromIndex == null || fromIndex === toIndex) return;
+    widgetsGenerationRef.current += 1;
+    const newOrder = [...enabledWidgets];
+    const [moved] = newOrder.splice(fromIndex, 1);
+    newOrder.splice(toIndex, 0, moved);
+    setEnabledWidgets(newOrder);
+    try {
+      await reorderDashboardWidgets(newOrder);
+    } catch (err) {
+      setWidgetsError(err.response?.data?.detail ?? err.message);
+    }
   };
 
   const handleGenerateWeek = async () => {
@@ -498,191 +609,352 @@ export default function NextTraining() {
     }
   };
 
-  const tiles = useMemo(() => {
-    if (!overview) return [];
-    return [
-      {
-        key: "squad",
-        label: "Spelersgroep",
-        value: overview.squad_count,
-        sub: "spelers in de A-kern",
-        to: "/players",
-      },
-      {
-        key: "flagged",
-        label: "Belast / overbelast / geblesseerd",
-        value: overview.flagged_count,
-        sub: "spelers met een actief signaal",
-        to: "/players?filter=flagged",
-        warn: overview.flagged_count > 0,
-      },
-      {
-        key: "sessions",
-        label: "Sessies deze week",
-        value: overview.sessions_this_week,
-        sub: overview.week_focus ? FOCUS_LABELS[overview.week_focus] ?? overview.week_focus : "geen actieve cyclus",
-        to: "/matches",
-      },
-      {
-        key: "next",
-        label: "Volgende sessie",
-        value: overview.next_session ? overview.next_session.label : "—",
-        sub: overview.next_session
-          ? overview.next_session.session_type === "match"
-            ? "wedstrijd"
-            : "training"
-          : "niets gepland",
-        onClick: scrollToComposition,
-      },
-    ];
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overview]);
-
   const defaultSessionDate = overview?.next_session?.session_date ?? todayIso();
+
+  const nextMatch = useMemo(() => {
+    const now = new Date();
+    const upcoming = matches
+      .filter((m) => new Date(m.match_date) >= now)
+      .sort((a, b) => new Date(a.match_date) - new Date(b.match_date));
+    return upcoming[0] ?? null;
+  }, [matches]);
+
+  const nextMasTestEvent = useMemo(() => {
+    const sorted = [...masTestEvents].sort((a, b) => new Date(a.event_date) - new Date(b.event_date));
+    return sorted[0] ?? null;
+  }, [masTestEvents]);
+
+  const cycleWeek = useMemo(() => currentCycleWeekLabel(cycles), [cycles]);
+
+  const renderTile = ({ label, value, sub, to, onClick, warn }) => {
+    const content = (
+      <>
+        <p className="text-[10px] uppercase tracking-wider text-gray-500 font-medium mb-2">{label}</p>
+        <p className={`text-3xl font-bold mb-1 ${warn ? "text-amber-400" : "text-white"}`}>{value}</p>
+        <p className="text-xs text-gray-500">{sub}</p>
+      </>
+    );
+    const className = `text-left block w-full h-full bg-gray-900/60 border rounded-2xl p-5 shadow-xl shadow-black/20 hover:bg-white/5 transition-colors ${
+      warn ? "border-amber-500/30" : "border-white/10"
+    }`;
+    return to ? (
+      <Link to={to} className={className}>
+        {content}
+      </Link>
+    ) : (
+      <button type="button" onClick={onClick} className={className}>
+        {content}
+      </button>
+    );
+  };
+
+  const renderWidget = (key) => {
+    switch (key) {
+      case "squad_count":
+        if (!overview) return null;
+        return renderTile({
+          label: "Spelersgroep",
+          value: overview.squad_count,
+          sub: "spelers in de A-kern",
+          to: "/players",
+        });
+      case "attention_players":
+        if (!overview) return null;
+        return renderTile({
+          label: "Belast / overbelast / geblesseerd",
+          value: overview.flagged_count,
+          sub: "spelers met een actief signaal",
+          to: "/players?filter=flagged",
+          warn: overview.flagged_count > 0,
+        });
+      case "sessions_this_week":
+        if (!overview) return null;
+        return renderTile({
+          label: "Sessies deze week",
+          value: overview.sessions_this_week,
+          sub: overview.week_focus ? FOCUS_LABELS[overview.week_focus] ?? overview.week_focus : "geen actieve cyclus",
+          to: "/matches",
+        });
+      case "next_session":
+        if (!overview) return null;
+        return renderTile({
+          label: "Volgende sessie",
+          value: overview.next_session ? overview.next_session.label : "—",
+          sub: overview.next_session
+            ? overview.next_session.session_type === "match"
+              ? "wedstrijd"
+              : "training"
+            : "niets gepland",
+          onClick: scrollToComposition,
+        });
+      case "next_match":
+        return renderTile({
+          label: "Volgende wedstrijd",
+          value: nextMatch ? `vs ${nextMatch.opponent}` : "—",
+          sub: nextMatch
+            ? new Date(nextMatch.match_date).toLocaleDateString("nl-BE", { day: "numeric", month: "short" })
+            : "geen wedstrijd gepland",
+          to: "/wedstrijden",
+        });
+      case "upcoming_mas_test":
+        return renderTile({
+          label: "Aankomende MAS-test",
+          value: nextMasTestEvent ? fmtDate(nextMasTestEvent.event_date) : "—",
+          sub: nextMasTestEvent ? `${nextMasTestEvent.player_ids.length} speler(s)` : "geen testmoment gepland",
+          to: "/matches",
+        });
+      case "make_schedules_shortcut":
+        return renderTile({
+          label: "Schema's maken",
+          value: "→",
+          sub: "Wedstrijdminuten en inhaalschema's",
+          to: "/wedstrijden",
+        });
+      case "cycle_week_status":
+        return renderTile({
+          label: "Cyclusweek-status",
+          value: cycleWeek ? `Week ${cycleWeek.weekNumber}` : "—",
+          sub: cycleWeek
+            ? `${cycleWeek.cycleName} · ${FOCUS_LABELS[cycleWeek.focus] ?? cycleWeek.focus}`
+            : "geen actieve cyclus",
+          to: "/matches",
+        });
+
+      case "current_mas_results":
+        return (
+          <div className="bg-gray-900/60 border border-white/10 rounded-2xl shadow-xl shadow-black/20 p-6">
+            <h2 className="text-white font-semibold mb-1">Huidige MAS-resultaten</h2>
+            <p className="text-sm text-gray-400 mb-4">Meest recente MAS-score per speler.</p>
+            {masResults.length === 0 ? (
+              <p className="text-gray-500 text-sm">Nog geen MAS-testresultaten.</p>
+            ) : (
+              <ul className="divide-y divide-white/5">
+                {masResults.map((r) => (
+                  <li key={r.player_id} className="py-2 flex items-center justify-between text-sm">
+                    <span className="text-gray-300">{r.player_name}</span>
+                    <span className="text-white font-medium">
+                      {r.mas_kmh} km/u <span className="text-gray-500 font-normal">({fmtDate(r.test_date)})</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        );
+
+      case "recent_sessions":
+        return (
+          <div className="bg-gray-900/60 border border-white/10 rounded-2xl shadow-xl shadow-black/20">
+            <div className="p-6 pb-0">
+              <h2 className="text-white font-semibold mb-1">Recente sessies</h2>
+              <p className="text-sm text-gray-400 mb-4">Klik op een sessie voor het volledige overzicht.</p>
+            </div>
+
+            {recentLoading && <p className="text-gray-400 text-sm px-6 pb-6">Laden…</p>}
+            {recentError && <p className="text-red-400 text-sm px-6 pb-6">{recentError}</p>}
+
+            {!recentLoading && !recentError && recent.length === 0 && (
+              <p className="text-gray-500 text-sm px-6 pb-6">Nog geen afgeronde sessies.</p>
+            )}
+
+            {!recentLoading && !recentError && recent.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left text-gray-300 min-w-[640px]">
+                  <thead>
+                    <tr className="text-[10px] uppercase tracking-wider text-gray-500 border-b border-white/10">
+                      <th className="px-6 py-3 font-medium">Sessie</th>
+                      <th className="px-4 py-3 font-medium">Type</th>
+                      <th className="px-4 py-3 font-medium">Datum</th>
+                      <th className="px-4 py-3 font-medium">Belasting</th>
+                      <th className="px-4 py-3 font-medium">RPE</th>
+                      <th className="px-4 py-3 font-medium"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recent.map((s) => (
+                      <tr
+                        key={s.id}
+                        onClick={() => openDetail(s.id)}
+                        className="border-b border-white/5 last:border-b-0 hover:bg-white/[0.03] transition-colors cursor-pointer"
+                      >
+                        <td className="px-6 py-3 font-medium text-white">{s.session_label}</td>
+                        <td className="px-4 py-3">{s.type_summary}</td>
+                        <td className="px-4 py-3 text-gray-400">{fmtDate(s.session_date)}</td>
+                        <td className="px-4 py-3">{s.total_distance_km} km</td>
+                        <td className="px-4 py-3">{s.team_avg_rpe != null ? s.team_avg_rpe : "—"}</td>
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeleteSession(s.id, e)}
+                            disabled={deletingId === s.id}
+                            title="Sessie verwijderen"
+                            className="text-gray-500 hover:text-red-400 text-xs px-1.5 py-1 rounded hover:bg-white/5 disabled:opacity-50"
+                          >
+                            {deletingId === s.id ? "…" : "✕"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+
+      case "next_training_builder":
+        return (
+          <div
+            ref={compositionRef}
+            className="bg-gray-900/60 border border-white/10 rounded-2xl p-6 shadow-xl shadow-black/20 space-y-5"
+          >
+            <div>
+              <h2 className="text-white font-semibold mb-1">Trainingen deze week samenstellen</h2>
+              <p className="text-sm text-gray-400">
+                Genereert automatisch een voorstel voor elke training van de actieve cyclusweek, op basis
+                van de teambelasting — jij geeft enkel het aantal aanwezige spelers door.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex flex-col text-gray-300 text-xs gap-1">
+                Aantal spelers aanwezig
+                <input
+                  type="number"
+                  min="1"
+                  value={numPlayers}
+                  onChange={(e) => setNumPlayers(e.target.value)}
+                  className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2 text-sm w-32 focus:outline-none focus:ring-2 ring-brand"
+                />
+              </label>
+              <button
+                onClick={handleGenerateWeek}
+                disabled={generating || !numPlayers}
+                className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {generating ? "Bezig…" : "Stel trainingen samen"}
+              </button>
+            </div>
+
+            {weekError && <p className="text-red-400 text-sm">{weekError}</p>}
+
+            {weekProposals && (
+              <div className="space-y-3">
+                {weekProposals.map((proposal) => (
+                  <SessionProposalCard
+                    key={proposal.session_id}
+                    proposal={proposal}
+                    numPlayers={numPlayers}
+                    vormenLibrary={vormenLibrary}
+                    defaultSessionDate={defaultSessionDate}
+                    onFinalized={handleSessionFinalized}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  const widgetLabel = (key) => availableWidgets.find((w) => w.key === key)?.label ?? key;
 
   return (
     <div className="max-w-6xl mx-auto py-12 px-4 space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold text-white tracking-tight mb-1.5">Dashboard</h1>
-        <p className="text-sm text-gray-400 max-w-2xl leading-relaxed">
-          Statusoverzicht van de spelersgroep, de trainingen van deze week samenstellen, en de recente
-          sessiegeschiedenis.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold text-white tracking-tight mb-1.5">Dashboard</h1>
+          <p className="text-sm text-gray-400 max-w-2xl leading-relaxed">
+            Statusoverzicht van de spelersgroep, de trainingen van deze week samenstellen, en de recente
+            sessiegeschiedenis — zelf in te delen.
+          </p>
+        </div>
+        <div className="relative shrink-0">
+          <button
+            onClick={() => setShowWidgetPicker((v) => !v)}
+            className="bg-white/5 hover:bg-white/10 border border-white/10 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors"
+          >
+            {showWidgetPicker ? "Sluiten" : "+ Toevoegen aan dashboard"}
+          </button>
+          {showWidgetPicker && (
+            <div className="absolute right-0 mt-2 w-80 bg-gray-900 border border-white/10 rounded-xl shadow-2xl p-2 space-y-0.5 z-20 max-h-96 overflow-y-auto">
+              {availableWidgets.length === 0 && (
+                <p className="text-xs text-gray-500 px-2.5 py-2">Geen widgets beschikbaar.</p>
+              )}
+              {availableWidgets.map((w) => {
+                const isEnabled = enabledWidgets.includes(w.key);
+                return (
+                  <label
+                    key={w.key}
+                    className="flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/5 cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isEnabled}
+                      onChange={(e) => handleToggleWidget(w.key, e.target.checked)}
+                      className="mt-0.5 rounded border-white/20 bg-gray-950"
+                    />
+                    <span>
+                      <span className="block text-sm text-white font-medium">{w.label}</span>
+                      <span className="block text-xs text-gray-500">{w.description}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
+      {widgetsError && <p className="text-red-400 text-sm">{widgetsError}</p>}
       {overviewLoading && <p className="text-gray-400 text-sm">Laden…</p>}
       {overviewError && <p className="text-red-400 text-sm">{overviewError}</p>}
 
-      {!overviewLoading && !overviewError && overview && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {tiles.map((tile) => {
-            const content = (
-              <>
-                <p className="text-[10px] uppercase tracking-wider text-gray-500 font-medium mb-2">{tile.label}</p>
-                <p className={`text-3xl font-bold mb-1 ${tile.warn ? "text-amber-400" : "text-white"}`}>
-                  {tile.value}
-                </p>
-                <p className="text-xs text-gray-500">{tile.sub}</p>
-              </>
-            );
-            const className = `text-left bg-gray-900/60 border rounded-2xl p-5 shadow-xl shadow-black/20 hover:bg-white/5 transition-colors ${
-              tile.warn ? "border-amber-500/30" : "border-white/10"
-            }`;
-            return tile.to ? (
-              <Link key={tile.key} to={tile.to} className={className}>
-                {content}
-              </Link>
-            ) : (
-              <button key={tile.key} onClick={tile.onClick} className={className}>
-                {content}
-              </button>
-            );
-          })}
+      {enabledWidgets.length === 0 && !overviewLoading && (
+        <div className="bg-gray-900/60 border border-white/10 rounded-2xl p-8 text-center text-gray-500 shadow-xl shadow-black/20">
+          Geen widgets op je dashboard — voeg er een toe via "Toevoegen aan dashboard" hierboven.
         </div>
       )}
 
-      <div ref={compositionRef} className="bg-gray-900/60 border border-white/10 rounded-2xl p-6 shadow-xl shadow-black/20 space-y-5">
-        <div>
-          <h2 className="text-white font-semibold mb-1">Trainingen deze week samenstellen</h2>
-          <p className="text-sm text-gray-400">
-            Genereert automatisch een voorstel voor elke training van de actieve cyclusweek, op basis
-            van de teambelasting — jij geeft enkel het aantal aanwezige spelers door.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col text-gray-300 text-xs gap-1">
-            Aantal spelers aanwezig
-            <input
-              type="number"
-              min="1"
-              value={numPlayers}
-              onChange={(e) => setNumPlayers(e.target.value)}
-              className="bg-gray-950 border border-white/10 text-white rounded-lg px-3 py-2 text-sm w-32 focus:outline-none focus:ring-2 ring-brand"
-            />
-          </label>
-          <button
-            onClick={handleGenerateWeek}
-            disabled={generating || !numPlayers}
-            className="btn-brand text-white px-5 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {generating ? "Bezig…" : "Stel trainingen samen"}
-          </button>
-        </div>
-
-        {weekError && <p className="text-red-400 text-sm">{weekError}</p>}
-
-        {weekProposals && (
-          <div className="space-y-3">
-            {weekProposals.map((proposal) => (
-              <SessionProposalCard
-                key={proposal.session_id}
-                proposal={proposal}
-                numPlayers={numPlayers}
-                vormenLibrary={vormenLibrary}
-                defaultSessionDate={defaultSessionDate}
-                onFinalized={handleSessionFinalized}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="bg-gray-900/60 border border-white/10 rounded-2xl shadow-xl shadow-black/20">
-        <div className="p-6 pb-0">
-          <h2 className="text-white font-semibold mb-1">Recente sessies</h2>
-          <p className="text-sm text-gray-400 mb-4">Klik op een sessie voor het volledige overzicht.</p>
-        </div>
-
-        {recentLoading && <p className="text-gray-400 text-sm px-6 pb-6">Laden…</p>}
-        {recentError && <p className="text-red-400 text-sm px-6 pb-6">{recentError}</p>}
-
-        {!recentLoading && !recentError && recent.length === 0 && (
-          <p className="text-gray-500 text-sm px-6 pb-6">Nog geen afgeronde sessies.</p>
-        )}
-
-        {!recentLoading && !recentError && recent.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left text-gray-300 min-w-[640px]">
-              <thead>
-                <tr className="text-[10px] uppercase tracking-wider text-gray-500 border-b border-white/10">
-                  <th className="px-6 py-3 font-medium">Sessie</th>
-                  <th className="px-4 py-3 font-medium">Type</th>
-                  <th className="px-4 py-3 font-medium">Datum</th>
-                  <th className="px-4 py-3 font-medium">Belasting</th>
-                  <th className="px-4 py-3 font-medium">RPE</th>
-                  <th className="px-4 py-3 font-medium"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {recent.map((s) => (
-                  <tr
-                    key={s.id}
-                    onClick={() => openDetail(s.id)}
-                    className="border-b border-white/5 last:border-b-0 hover:bg-white/[0.03] transition-colors cursor-pointer"
-                  >
-                    <td className="px-6 py-3 font-medium text-white">{s.session_label}</td>
-                    <td className="px-4 py-3">{s.type_summary}</td>
-                    <td className="px-4 py-3 text-gray-400">{fmtDate(s.session_date)}</td>
-                    <td className="px-4 py-3">{s.total_distance_km} km</td>
-                    <td className="px-4 py-3">{s.team_avg_rpe != null ? s.team_avg_rpe : "—"}</td>
-                    <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        onClick={(e) => handleDeleteSession(s.id, e)}
-                        disabled={deletingId === s.id}
-                        title="Sessie verwijderen"
-                        className="text-gray-500 hover:text-red-400 text-xs px-1.5 py-1 rounded hover:bg-white/5 disabled:opacity-50"
-                      >
-                        {deletingId === s.id ? "…" : "✕"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+      <div className="flex flex-wrap gap-4 items-start">
+        {enabledWidgets.map((key, index) => {
+          const content = renderWidget(key);
+          if (content === null) return null;
+          const size = WIDGET_SIZE[key] ?? "full";
+          const widthClass = size === "small" ? "w-full sm:w-[calc(50%-0.5rem)] lg:w-[calc(25%-0.75rem)]" : "w-full";
+          return (
+            <div
+              key={key}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => handleReorderWidget(dragWidgetIndex, index)}
+              className={`relative group ${widthClass} ${dragWidgetIndex === index ? "opacity-40" : ""}`}
+            >
+              <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <span
+                  draggable
+                  onDragStart={() => setDragWidgetIndex(index)}
+                  onDragEnd={() => setDragWidgetIndex(null)}
+                  title="Sleep om te herschikken"
+                  className="cursor-grab active:cursor-grabbing bg-gray-800/90 border border-white/10 rounded-md px-1.5 py-1 text-gray-400 text-xs select-none"
+                >
+                  ⠿
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleToggleWidget(key, false)}
+                  title={`${widgetLabel(key)} verwijderen van dashboard`}
+                  className="bg-gray-800/90 border border-white/10 rounded-md px-1.5 py-1 text-gray-400 hover:text-red-400 text-xs"
+                >
+                  ✕
+                </button>
+              </div>
+              {content}
+            </div>
+          );
+        })}
       </div>
 
       {detailId && (

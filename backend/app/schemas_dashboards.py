@@ -248,6 +248,13 @@ class RecordMasTestResponse(BaseModel):
     calendar_events_synced: int
 
 
+class CurrentMasResultSchema(BaseModel):
+    player_id: uuid.UUID
+    player_name: str
+    mas_kmh: float
+    test_date: date
+
+
 class MasTestBatchEntry(BaseModel):
     player_id: uuid.UUID
     # None/blank = the coach hasn't filled this player's result in yet —

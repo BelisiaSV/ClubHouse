@@ -10,6 +10,15 @@ export type ScheduleEntryType =
 export type PermissionRequestType = "vroeger_vertrek" | "later_toekomen" | "afwezigheid" | "overig";
 export type PermissionStatus = "in_afwachting" | "goedgekeurd" | "geweigerd";
 export type AthleteMeetingType = "klassenraad" | "deliberatie";
+export type MealCode = "" | "s" | "v" | "gv";
+export type MealExceptionType =
+  | "ziek"
+  | "afwezig_schoolreis_stage"
+  | "afwezig_andere"
+  | "eenmalige_maaltijd"
+  | "stopt_tijdelijk"
+  | "heropstart"
+  | "andere";
 
 export interface Database {
   public: {
@@ -342,31 +351,90 @@ export interface Database {
         };
         Relationships: [];
       };
-      meals: {
+      meal_plans: {
         Row: {
           id: string;
           athlete_id: string;
-          meal_date: string;
-          is_registered: boolean;
-          note: string | null;
-          registered_by: string | null;
+          effective_from: string;
+          monday_code: MealCode;
+          tuesday_code: MealCode;
+          thursday_code: MealCode;
+          friday_code: MealCode;
+          reason: string | null;
+          created_by: string | null;
           created_at: string;
-          updated_at: string;
         };
         Insert: {
           id?: string;
           athlete_id: string;
-          meal_date: string;
-          is_registered?: boolean;
+          effective_from: string;
+          monday_code?: MealCode;
+          tuesday_code?: MealCode;
+          thursday_code?: MealCode;
+          friday_code?: MealCode;
+          reason?: string | null;
+          created_by?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          monday_code?: MealCode;
+          tuesday_code?: MealCode;
+          thursday_code?: MealCode;
+          friday_code?: MealCode;
+          reason?: string | null;
+        };
+        Relationships: [];
+      };
+      meal_exceptions: {
+        Row: {
+          id: string;
+          athlete_id: string;
+          exception_type: MealExceptionType;
+          meal_code: MealCode;
+          date_from: string;
+          date_to: string | null;
+          note: string | null;
+          registered_by: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          athlete_id: string;
+          exception_type: MealExceptionType;
+          meal_code?: MealCode;
+          date_from: string;
+          date_to?: string | null;
           note?: string | null;
           registered_by?: string | null;
           created_at?: string;
-          updated_at?: string;
         };
         Update: {
-          is_registered?: boolean;
+          exception_type?: MealExceptionType;
+          meal_code?: MealCode;
+          date_from?: string;
+          date_to?: string | null;
           note?: string | null;
-          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      meal_free_days: {
+        Row: {
+          id: string;
+          free_date: string;
+          description: string | null;
+          created_by: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          free_date: string;
+          description?: string | null;
+          created_by?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          free_date?: string;
+          description?: string | null;
         };
         Relationships: [];
       };

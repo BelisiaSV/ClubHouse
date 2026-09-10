@@ -1,26 +1,39 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { countDay, toDateStr } from "@/lib/meals";
 
-const TODAY = new Date().toISOString().slice(0, 10);
+const TODAY = toDateStr(new Date());
 
 async function getKpis() {
   const supabase = await createClient();
 
-  const [athletes, mealsToday, pendingPermissions, upcomingPermissions] = await Promise.all([
-    supabase.from("athletes").select("id", { count: "exact", head: true }).eq("is_active", true),
-    supabase
-      .from("meals")
-      .select("id", { count: "exact", head: true })
-      .eq("meal_date", TODAY)
-      .eq("is_registered", true),
-    supabase.from("permissions").select("id", { count: "exact", head: true }).eq("status", "in_afwachting"),
-    supabase
-      .from("permissions")
-      .select("id, athlete_id, request_type, requested_date, status")
-      .eq("status", "in_afwachting")
-      .order("requested_date", { ascending: true })
-      .limit(5),
-  ]);
+  const [athletes, mealAthletes, mealPlansToday, mealExceptionsToday, mealFreeDays, pendingPermissions, upcomingPermissions] =
+    await Promise.all([
+      supabase.from("athletes").select("id", { count: "exact", head: true }).eq("is_active", true),
+      supabase.from("athletes").select("id").eq("is_active", true).eq("is_boarding_student", false),
+      supabase.from("meal_plans").select("*").lte("effective_from", TODAY),
+      supabase
+        .from("meal_exceptions")
+        .select("*")
+        .lte("date_from", TODAY)
+        .or(`date_to.is.null,date_to.gte.${TODAY}`),
+      supabase.from("meal_free_days").select("*").eq("free_date", TODAY),
+      supabase.from("permissions").select("id", { count: "exact", head: true }).eq("status", "in_afwachting"),
+      supabase
+        .from("permissions")
+        .select("id, athlete_id, request_type, requested_date, status")
+        .eq("status", "in_afwachting")
+        .order("requested_date", { ascending: true })
+        .limit(5),
+    ]);
+
+  const mealsTodayCount = countDay(
+    (mealAthletes.data ?? []).map((a) => a.id),
+    TODAY,
+    mealPlansToday.data ?? [],
+    mealExceptionsToday.data ?? [],
+    mealFreeDays.data ?? []
+  ).total;
 
   const athleteIds = (upcomingPermissions.data ?? []).map((permission) => permission.athlete_id);
   const { data: athleteRows } =
@@ -31,7 +44,7 @@ async function getKpis() {
 
   return {
     activeAthleteCount: athletes.count ?? 0,
-    mealsTodayCount: mealsToday.count ?? 0,
+    mealsTodayCount,
     pendingPermissionCount: pendingPermissions.count ?? 0,
     upcomingPermissions: (upcomingPermissions.data ?? []).map((permission) => ({
       ...permission,

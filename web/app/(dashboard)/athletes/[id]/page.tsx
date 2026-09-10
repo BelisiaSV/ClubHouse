@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import AthleteMeetings from "@/components/athletes/AthleteMeetings";
 import AthleteCustomFields from "@/components/athletes/AthleteCustomFields";
+import AthleteMealPlan from "@/components/athletes/AthleteMealPlan";
 
 const REQUEST_TYPE_LABEL: Record<string, string> = {
   vroeger_vertrek: "Vroeger vertrek",
@@ -33,17 +34,19 @@ export default async function AthleteProfilePage({ params }: { params: Promise<{
   const { id } = await params;
   const supabase = await createClient();
 
-  const [{ data: athlete }, { data: permissions }, { data: meetings }, { data: customFields }] = await Promise.all([
-    supabase.from("athletes").select("*").eq("id", id).single(),
-    supabase
-      .from("permissions")
-      .select("id, request_type, requested_date, status")
-      .eq("athlete_id", id)
-      .order("requested_date", { ascending: false })
-      .limit(10),
-    supabase.from("athlete_meetings").select("*").eq("athlete_id", id).order("meeting_date", { ascending: false }),
-    supabase.from("athlete_custom_fields").select("*").eq("athlete_id", id).order("created_at", { ascending: true }),
-  ]);
+  const [{ data: athlete }, { data: permissions }, { data: meetings }, { data: customFields }, { data: mealPlans }] =
+    await Promise.all([
+      supabase.from("athletes").select("*").eq("id", id).single(),
+      supabase
+        .from("permissions")
+        .select("id, request_type, requested_date, status")
+        .eq("athlete_id", id)
+        .order("requested_date", { ascending: false })
+        .limit(10),
+      supabase.from("athlete_meetings").select("*").eq("athlete_id", id).order("meeting_date", { ascending: false }),
+      supabase.from("athlete_custom_fields").select("*").eq("athlete_id", id).order("created_at", { ascending: true }),
+      supabase.from("meal_plans").select("*").eq("athlete_id", id).order("effective_from", { ascending: false }),
+    ]);
 
   if (!athlete) {
     notFound();
@@ -139,6 +142,17 @@ export default async function AthleteProfilePage({ params }: { params: Promise<{
           </ul>
         )}
       </div>
+
+      {athlete.is_boarding_student ? (
+        <div className="rounded-2xl border border-white/10 bg-gray-900/60 p-5 shadow-xl shadow-black/20">
+          <h2 className="mb-2 text-sm font-semibold text-white">Maaltijdplanning</h2>
+          <p className="text-sm text-gray-500">
+            Internaatsleerling — eet op het internaat, wordt niet meegeteld in de schoolse maaltijdplanning.
+          </p>
+        </div>
+      ) : (
+        <AthleteMealPlan athleteId={athlete.id} plans={mealPlans ?? []} />
+      )}
 
       <AthleteMeetings athleteId={athlete.id} meetings={meetings ?? []} />
       <AthleteCustomFields athleteId={athlete.id} fields={customFields ?? []} />

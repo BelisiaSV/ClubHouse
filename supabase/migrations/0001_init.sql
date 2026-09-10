@@ -1,7 +1,8 @@
 -- ============================================================================
 -- The TopsportSpace — "The Performance Desk" — initial schema
 -- profiles · invitations · documents · comments · athletes · schedules ·
--- permissions · meals · messages (Dug-out Chat)
+-- permissions · meal_plans/meal_exceptions/meal_free_days · athlete_meetings
+-- · athlete_custom_fields · messages (Dug-out Chat)
 -- ============================================================================
 -- Two roles only: 'hoofdcoach' (UI label: Topsportdirecteur — full rights
 -- incl. inviting/removing staff) and 'assistent_coach' (UI label: Staff/
@@ -164,9 +165,10 @@ create table public.athletes (
   guardian_phone text,
   guardian_email text,
   -- Warme maaltijden: this is the standing preference/eligibility flag —
-  -- distinct from `meals`, which logs the actual per-day registration
-  -- (an athlete can be opted in generally but skip/be marked absent a
-  -- given day, or vice versa for a one-off exception).
+  -- distinct from `meal_plans`/`meal_exceptions`, which model the actual
+  -- weekly meal-day schedule and its overrides (an athlete can be opted in
+  -- generally but skip/be marked absent a given day, or vice versa for a
+  -- one-off exception).
   meal_plan_opt_in boolean not null default false,
   is_boarding_student boolean not null default false,
   boarding_school_name text,
@@ -309,28 +311,82 @@ create index permissions_requested_date_idx on public.permissions (requested_dat
 create index permissions_status_idx on public.permissions (status);
 
 -- ----------------------------------------------------------------------------
--- meals — daily warme-maaltijden registration, one row per (athlete, date).
--- 'is_registered' rather than a delete-on-cancel keeps the day's headcount
--- ("hoeveel maaltijden moeten er klaargemaakt worden") auditable — an
--- afmelding is a state change, not a vanished row.
+-- Warme maaltijden — ported 1:1 from the standalone "Maaltijdplanning"
+-- HTML tool staff were already using: a weekly RECURRING plan per athlete
+-- (which of Mon/Tue/Thu/Fri they eat, and which meal code), versioned over
+-- time rather than overwritten, plus dated EXCEPTIONS (illness, a one-off
+-- extra meal, ...) and school-wide FREE DAYS with no warm meals at all.
+-- Nothing here is a per-day row — "does athlete X eat on date Y" is always
+-- DERIVED (free day? → no; exception covering Y? → that code; else → the
+-- plan version in force on Y) exactly like the original tool's getMeal(),
+-- ported to lib/meals.ts on the frontend rather than re-implemented in SQL.
+-- meal_code values throughout: '' (no meal that day), 's' (standaard),
+-- 'v' (vegetarisch), 'gv' (geen varkensvlees).
 -- ----------------------------------------------------------------------------
-create table public.meals (
+
+-- meal_plans — one row per (athlete, effective_from): the weekly code
+-- choice in force from that date until the next plan version starts (or
+-- forever, if it's the latest). A new row is inserted for every change
+-- ("Planningswijziging") rather than mutating the old one, so the history
+-- stays intact for the Wijzigingen/audit view.
+create table public.meal_plans (
   id uuid primary key default gen_random_uuid(),
   athlete_id uuid not null references public.athletes (id) on delete cascade,
-  meal_date date not null,
-  is_registered boolean not null default true,
+  effective_from date not null,
+  monday_code text not null default '',
+  tuesday_code text not null default '',
+  thursday_code text not null default '',
+  friday_code text not null default '',
+  reason text,
+  created_by uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  constraint meal_plans_codes_check check (
+    monday_code in ('', 's', 'v', 'gv') and
+    tuesday_code in ('', 's', 'v', 'gv') and
+    thursday_code in ('', 's', 'v', 'gv') and
+    friday_code in ('', 's', 'v', 'gv')
+  ),
+  unique (athlete_id, effective_from)
+);
+
+create index meal_plans_athlete_id_idx on public.meal_plans (athlete_id);
+
+-- meal_exceptions — a dated override on top of the plan: an absence
+-- (ziek/afwezig/...) or a one-off extra meal ('eenmalige_maaltijd'),
+-- open-ended when date_to is null.
+create type public.meal_exception_type as enum (
+  'ziek', 'afwezig_schoolreis_stage', 'afwezig_andere',
+  'eenmalige_maaltijd', 'stopt_tijdelijk', 'heropstart', 'andere'
+);
+
+create table public.meal_exceptions (
+  id uuid primary key default gen_random_uuid(),
+  athlete_id uuid not null references public.athletes (id) on delete cascade,
+  exception_type public.meal_exception_type not null,
+  meal_code text not null default '',
+  date_from date not null,
+  date_to date,
   note text,
   registered_by uuid references public.profiles (id) on delete set null,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  unique (athlete_id, meal_date)
+  constraint meal_exceptions_code_check check (meal_code in ('', 's', 'v', 'gv')),
+  constraint meal_exceptions_date_range_check check (date_to is null or date_to >= date_from)
 );
 
-create index meals_meal_date_idx on public.meals (meal_date);
+create index meal_exceptions_athlete_id_idx on public.meal_exceptions (athlete_id);
+create index meal_exceptions_date_from_idx on public.meal_exceptions (date_from);
 
-create trigger meals_set_updated_at
-  before update on public.meals
-  for each row execute function public.set_updated_at();
+-- meal_free_days — school-wide days with no warm meals offered at all
+-- (e.g. a study day), independent of any athlete's plan.
+create table public.meal_free_days (
+  id uuid primary key default gen_random_uuid(),
+  free_date date not null unique,
+  description text,
+  created_by uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create index meal_free_days_free_date_idx on public.meal_free_days (free_date);
 
 -- ----------------------------------------------------------------------------
 -- messages — the Dug-out Chat. A single shared channel: this is a closed,
@@ -355,7 +411,9 @@ alter table public.messages replica identity full;
 alter table public.comments replica identity full;
 alter table public.documents replica identity full;
 alter table public.permissions replica identity full;
-alter table public.meals replica identity full;
+alter table public.meal_plans replica identity full;
+alter table public.meal_exceptions replica identity full;
+alter table public.meal_free_days replica identity full;
 alter table public.athletes replica identity full;
 alter table public.athlete_meetings replica identity full;
 alter table public.athlete_custom_fields replica identity full;
@@ -455,7 +513,9 @@ alter table public.comments enable row level security;
 alter table public.athletes enable row level security;
 alter table public.schedules enable row level security;
 alter table public.permissions enable row level security;
-alter table public.meals enable row level security;
+alter table public.meal_plans enable row level security;
+alter table public.meal_exceptions enable row level security;
+alter table public.meal_free_days enable row level security;
 alter table public.athlete_meetings enable row level security;
 alter table public.athlete_custom_fields enable row level security;
 alter table public.messages enable row level security;
@@ -597,25 +657,65 @@ create policy "permissions_delete_owner_or_hoofdcoach"
   to authenticated
   using (requested_by = auth.uid() or public.is_hoofdcoach(auth.uid()));
 
-create policy "meals_select_authenticated"
-  on public.meals for select
+create policy "meal_plans_select_authenticated"
+  on public.meal_plans for select
   to authenticated
   using (true);
 
-create policy "meals_insert_authenticated"
-  on public.meals for insert
+create policy "meal_plans_insert_authenticated"
+  on public.meal_plans for insert
   to authenticated
   with check (true);
 
-create policy "meals_update_authenticated"
-  on public.meals for update
+create policy "meal_plans_update_authenticated"
+  on public.meal_plans for update
   to authenticated
   using (true);
 
-create policy "meals_delete_owner_or_hoofdcoach"
-  on public.meals for delete
+create policy "meal_plans_delete_owner_or_hoofdcoach"
+  on public.meal_plans for delete
+  to authenticated
+  using (created_by = auth.uid() or public.is_hoofdcoach(auth.uid()));
+
+create policy "meal_exceptions_select_authenticated"
+  on public.meal_exceptions for select
+  to authenticated
+  using (true);
+
+create policy "meal_exceptions_insert_authenticated"
+  on public.meal_exceptions for insert
+  to authenticated
+  with check (true);
+
+create policy "meal_exceptions_update_authenticated"
+  on public.meal_exceptions for update
+  to authenticated
+  using (true);
+
+create policy "meal_exceptions_delete_owner_or_hoofdcoach"
+  on public.meal_exceptions for delete
   to authenticated
   using (registered_by = auth.uid() or public.is_hoofdcoach(auth.uid()));
+
+create policy "meal_free_days_select_authenticated"
+  on public.meal_free_days for select
+  to authenticated
+  using (true);
+
+create policy "meal_free_days_insert_authenticated"
+  on public.meal_free_days for insert
+  to authenticated
+  with check (true);
+
+create policy "meal_free_days_update_authenticated"
+  on public.meal_free_days for update
+  to authenticated
+  using (true);
+
+create policy "meal_free_days_delete_owner_or_hoofdcoach"
+  on public.meal_free_days for delete
+  to authenticated
+  using (created_by = auth.uid() or public.is_hoofdcoach(auth.uid()));
 
 -- athlete_meetings/athlete_custom_fields: same authenticated-read-write,
 -- creator-or-hoofdcoach-delete pattern as the rest of an athlete's profile.
@@ -692,7 +792,9 @@ alter publication supabase_realtime add table public.messages;
 alter publication supabase_realtime add table public.comments;
 alter publication supabase_realtime add table public.documents;
 alter publication supabase_realtime add table public.permissions;
-alter publication supabase_realtime add table public.meals;
+alter publication supabase_realtime add table public.meal_plans;
+alter publication supabase_realtime add table public.meal_exceptions;
+alter publication supabase_realtime add table public.meal_free_days;
 alter publication supabase_realtime add table public.athletes;
 alter publication supabase_realtime add table public.athlete_meetings;
 alter publication supabase_realtime add table public.athlete_custom_fields;

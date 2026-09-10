@@ -1,5 +1,14 @@
 export type UserRole = "hoofdcoach" | "assistent_coach";
 export type InvitationStatus = "pending" | "accepted" | "revoked";
+export type ScheduleEntryType =
+  | "les"
+  | "training"
+  | "stage"
+  | "wedstrijd"
+  | "topsport_verplichting"
+  | "overig";
+export type PermissionRequestType = "vroeger_vertrek" | "later_toekomen" | "afwezigheid" | "overig";
+export type PermissionStatus = "in_afwachting" | "goedgekeurd" | "geweigerd";
 
 export interface Database {
   public: {
@@ -61,9 +70,11 @@ export interface Database {
           file_path: string;
           file_type: string;
           tags: string[];
+          content_text: string | null;
           uploaded_by: string | null;
           created_at: string;
           updated_at: string;
+          search_vector: unknown;
         };
         Insert: {
           id?: string;
@@ -72,6 +83,7 @@ export interface Database {
           file_path: string;
           file_type: string;
           tags?: string[];
+          content_text?: string | null;
           uploaded_by: string;
           created_at?: string;
           updated_at?: string;
@@ -80,6 +92,7 @@ export interface Database {
           title?: string;
           description?: string | null;
           tags?: string[];
+          content_text?: string | null;
           updated_at?: string;
         };
         Relationships: [];
@@ -103,6 +116,162 @@ export interface Database {
         };
         Update: {
           body?: string;
+        };
+        Relationships: [];
+      };
+      athletes: {
+        Row: {
+          id: string;
+          full_name: string;
+          date_of_birth: string | null;
+          sport: string | null;
+          class_group: string | null;
+          external_club: string | null;
+          contact_email: string | null;
+          contact_phone: string | null;
+          notes: string | null;
+          is_active: boolean;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          full_name: string;
+          date_of_birth?: string | null;
+          sport?: string | null;
+          class_group?: string | null;
+          external_club?: string | null;
+          contact_email?: string | null;
+          contact_phone?: string | null;
+          notes?: string | null;
+          is_active?: boolean;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          full_name?: string;
+          date_of_birth?: string | null;
+          sport?: string | null;
+          class_group?: string | null;
+          external_club?: string | null;
+          contact_email?: string | null;
+          contact_phone?: string | null;
+          notes?: string | null;
+          is_active?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      schedules: {
+        Row: {
+          id: string;
+          athlete_id: string;
+          entry_type: ScheduleEntryType;
+          title: string;
+          day_of_week: number | null;
+          specific_date: string | null;
+          start_time: string | null;
+          end_time: string | null;
+          location: string | null;
+          notes: string | null;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          athlete_id: string;
+          entry_type?: ScheduleEntryType;
+          title: string;
+          day_of_week?: number | null;
+          specific_date?: string | null;
+          start_time?: string | null;
+          end_time?: string | null;
+          location?: string | null;
+          notes?: string | null;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          entry_type?: ScheduleEntryType;
+          title?: string;
+          day_of_week?: number | null;
+          specific_date?: string | null;
+          start_time?: string | null;
+          end_time?: string | null;
+          location?: string | null;
+          notes?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      permissions: {
+        Row: {
+          id: string;
+          athlete_id: string;
+          request_type: PermissionRequestType;
+          requested_date: string;
+          start_time: string | null;
+          end_time: string | null;
+          reason: string | null;
+          status: PermissionStatus;
+          requested_by: string | null;
+          decided_by: string | null;
+          decided_at: string | null;
+          decision_note: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          athlete_id: string;
+          request_type?: PermissionRequestType;
+          requested_date: string;
+          start_time?: string | null;
+          end_time?: string | null;
+          reason?: string | null;
+          status?: PermissionStatus;
+          requested_by?: string | null;
+          decided_by?: string | null;
+          decided_at?: string | null;
+          decision_note?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          status?: PermissionStatus;
+          decided_by?: string | null;
+          decided_at?: string | null;
+          decision_note?: string | null;
+        };
+        Relationships: [];
+      };
+      meals: {
+        Row: {
+          id: string;
+          athlete_id: string;
+          meal_date: string;
+          is_registered: boolean;
+          note: string | null;
+          registered_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          athlete_id: string;
+          meal_date: string;
+          is_registered?: boolean;
+          note?: string | null;
+          registered_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          is_registered?: boolean;
+          note?: string | null;
+          updated_at?: string;
         };
         Relationships: [];
       };

@@ -12,10 +12,10 @@ never log in, their data is managed by staff (see `athletes` in the schema).
    supabase db push
    ```
    (or paste `supabase/migrations/0001_init.sql` into the SQL editor). This creates
-   `profiles`, `invitations`, `documents`, `comments`, `athletes`, `schedules`,
-   `permissions`, `meals`, `messages`, their RLS policies, the `documents` Storage
-   bucket + policies, and the `handle_new_user` trigger that syncs `auth.users` →
-   `profiles`.
+   `profiles`, `invitations`, `documents`, `comments`, `athletes`, `athlete_meetings`,
+   `athlete_custom_fields`, `schedules`, `permissions`, `meals`, `messages`, their RLS
+   policies, the `documents` Storage bucket + policies, and the `handle_new_user`
+   trigger that syncs `auth.users` → `profiles`.
 
 2. The **first** person to sign up is automatically made `hoofdcoach` (UI label:
    Topsportdirecteur — see the trigger's bootstrap case) — sign up once via Supabase Auth
@@ -41,10 +41,16 @@ never log in, their data is managed by staff (see `athletes` in the schema).
   meals registered today, permissions pending) + a queue of open permission requests.
 - `app/(dashboard)/chat` — the Dug-out Chat (server component fetches the session +
   initial messages/profiles, then hands off to the realtime client component).
-- `app/(dashboard)/athletes`, `.../permissions`, `.../meals`, `.../documents` — read-only
-  overview tables (see "Not built yet" below — create/edit UI is the next step).
+- `app/(dashboard)/athletes` — full athlete profile: overview table, `/new` create form,
+  `/[id]` profile page (all fixed fields + klassenraad/deliberatie log + free-form extra
+  fields), `/[id]/edit`.
+- `app/(dashboard)/permissions`, `.../meals`, `.../documents` — read-only overview tables
+  (see "Not built yet" below — create/edit UI is the next step for these).
 - `components/dugout-chat/DugoutChat.tsx` — the chat UI + Supabase Realtime
   (`postgres_changes` on `public.messages`) subscription.
+- `components/athletes/AthleteForm.tsx` — the create/edit profile form (shared by both
+  routes); `AthleteMeetings.tsx` and `AthleteCustomFields.tsx` — the two sub-sections on
+  the profile page, each with their own inline add form.
 - `components/app-shell/` — the sidebar navigation + shell wrapping every dashboard page.
 - `lib/supabase/` — browser client, server (RSC) client, and the proxy (middleware)
   session refresher.
@@ -54,10 +60,11 @@ never log in, their data is managed by staff (see `athletes` in the schema).
 ## Not built yet
 
 - Invitation UI (admin panel) — schema/RLS ready, `invitations` table only.
-- Create/edit forms for athletes, schedules, permissions (approve/refuse), and meal
-  registrations — currently read-only overview tables.
+- Create/edit forms for schedules, permissions (approve/refuse), and meal registrations
+  — currently read-only overview tables (athletes now has full create/edit, see above).
 - Document upload + full-text search UI, and document comment threads — schema/RLS/
   Storage bucket ready (`documents.search_vector`, `documents.content_text`,
-  `comments`), only the frontend is pending.
+  `comments`), only the frontend is pending. Linking a klassenraad/deliberatie report to
+  an uploaded document (`athlete_meetings.report_document_id`) also waits on this.
 - Operations Analytics charts (absentees today, meals to prepare, curriculum coverage).
 - External HTML/iFrame embeds for third-party rosters (e.g. Smartschool).

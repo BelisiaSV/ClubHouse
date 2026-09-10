@@ -9,6 +9,7 @@ export type ScheduleEntryType =
   | "overig";
 export type PermissionRequestType = "vroeger_vertrek" | "later_toekomen" | "afwezigheid" | "overig";
 export type PermissionStatus = "in_afwachting" | "goedgekeurd" | "geweigerd";
+export type AthleteMeetingType = "klassenraad" | "deliberatie";
 
 export interface Database {
   public: {
@@ -129,6 +130,17 @@ export interface Database {
           external_club: string | null;
           contact_email: string | null;
           contact_phone: string | null;
+          guardian_name: string | null;
+          guardian_phone: string | null;
+          guardian_email: string | null;
+          meal_plan_opt_in: boolean;
+          is_boarding_student: boolean;
+          boarding_school_name: string | null;
+          departure_time: string | null;
+          departure_notes: string | null;
+          medical_screening_done: boolean;
+          medical_screening_date: string | null;
+          medical_screening_notes: string | null;
           notes: string | null;
           is_active: boolean;
           created_by: string | null;
@@ -144,6 +156,17 @@ export interface Database {
           external_club?: string | null;
           contact_email?: string | null;
           contact_phone?: string | null;
+          guardian_name?: string | null;
+          guardian_phone?: string | null;
+          guardian_email?: string | null;
+          meal_plan_opt_in?: boolean;
+          is_boarding_student?: boolean;
+          boarding_school_name?: string | null;
+          departure_time?: string | null;
+          departure_notes?: string | null;
+          medical_screening_done?: boolean;
+          medical_screening_date?: string | null;
+          medical_screening_notes?: string | null;
           notes?: string | null;
           is_active?: boolean;
           created_by?: string | null;
@@ -158,8 +181,80 @@ export interface Database {
           external_club?: string | null;
           contact_email?: string | null;
           contact_phone?: string | null;
+          guardian_name?: string | null;
+          guardian_phone?: string | null;
+          guardian_email?: string | null;
+          meal_plan_opt_in?: boolean;
+          is_boarding_student?: boolean;
+          boarding_school_name?: string | null;
+          departure_time?: string | null;
+          departure_notes?: string | null;
+          medical_screening_done?: boolean;
+          medical_screening_date?: string | null;
+          medical_screening_notes?: string | null;
           notes?: string | null;
           is_active?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      athlete_meetings: {
+        Row: {
+          id: string;
+          athlete_id: string;
+          meeting_type: AthleteMeetingType;
+          meeting_date: string;
+          preparation_notes: string | null;
+          report_notes: string | null;
+          report_document_id: string | null;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          athlete_id: string;
+          meeting_type: AthleteMeetingType;
+          meeting_date: string;
+          preparation_notes?: string | null;
+          report_notes?: string | null;
+          report_document_id?: string | null;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          meeting_type?: AthleteMeetingType;
+          meeting_date?: string;
+          preparation_notes?: string | null;
+          report_notes?: string | null;
+          report_document_id?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      athlete_custom_fields: {
+        Row: {
+          id: string;
+          athlete_id: string;
+          label: string;
+          value: string | null;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          athlete_id: string;
+          label: string;
+          value?: string | null;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          label?: string;
+          value?: string | null;
           updated_at?: string;
         };
         Relationships: [];

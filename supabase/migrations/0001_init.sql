@@ -144,8 +144,12 @@ create table public.comments (
 create index comments_document_id_idx on public.comments (document_id);
 
 -- ----------------------------------------------------------------------------
--- athletes — the student-athletes staff manage. No login of their own;
--- every FK from schedules/permissions/meals points here, not at profiles.
+-- athletes — the student-athletes' profile. No login of their own; every FK
+-- from schedules/permissions/meals/athlete_meetings/athlete_custom_fields
+-- points here, not at profiles. contact_email/contact_phone are the
+-- athlete's OWN contact details (only relevant for older students) —
+-- guardian_* is the parent/guardian contact the school actually leans on
+-- day to day.
 -- ----------------------------------------------------------------------------
 create table public.athletes (
   id uuid primary key default gen_random_uuid(),
@@ -156,6 +160,21 @@ create table public.athletes (
   external_club text,
   contact_email text,
   contact_phone text,
+  guardian_name text,
+  guardian_phone text,
+  guardian_email text,
+  -- Warme maaltijden: this is the standing preference/eligibility flag —
+  -- distinct from `meals`, which logs the actual per-day registration
+  -- (an athlete can be opted in generally but skip/be marked absent a
+  -- given day, or vice versa for a one-off exception).
+  meal_plan_opt_in boolean not null default false,
+  is_boarding_student boolean not null default false,
+  boarding_school_name text,
+  departure_time time,
+  departure_notes text,
+  medical_screening_done boolean not null default false,
+  medical_screening_date date,
+  medical_screening_notes text,
   notes text,
   is_active boolean not null default true,
   created_by uuid references public.profiles (id) on delete set null,
@@ -168,6 +187,57 @@ create index athletes_class_group_idx on public.athletes (class_group);
 
 create trigger athletes_set_updated_at
   before update on public.athletes
+  for each row execute function public.set_updated_at();
+
+-- ----------------------------------------------------------------------------
+-- athlete_meetings — klassenraad ("class council") and deliberatie
+-- ("deliberation") entries for an athlete: a date, prep notes, a report,
+-- and optionally a link to an uploaded report file in `documents`. One
+-- table for both meeting types since they share the same shape (a date +
+-- preparation + a report) rather than two near-identical tables.
+-- ----------------------------------------------------------------------------
+create type public.athlete_meeting_type as enum ('klassenraad', 'deliberatie');
+
+create table public.athlete_meetings (
+  id uuid primary key default gen_random_uuid(),
+  athlete_id uuid not null references public.athletes (id) on delete cascade,
+  meeting_type public.athlete_meeting_type not null,
+  meeting_date date not null,
+  preparation_notes text,
+  report_notes text,
+  report_document_id uuid references public.documents (id) on delete set null,
+  created_by uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index athlete_meetings_athlete_id_idx on public.athlete_meetings (athlete_id);
+create index athlete_meetings_meeting_date_idx on public.athlete_meetings (meeting_date);
+
+create trigger athlete_meetings_set_updated_at
+  before update on public.athlete_meetings
+  for each row execute function public.set_updated_at();
+
+-- ----------------------------------------------------------------------------
+-- athlete_custom_fields — free-form "add anything else" label/value pairs
+-- per athlete, for whatever the fixed profile columns above don't cover.
+-- Deliberately unstructured (plain text value) rather than typed, since
+-- what staff will want to track here isn't known upfront.
+-- ----------------------------------------------------------------------------
+create table public.athlete_custom_fields (
+  id uuid primary key default gen_random_uuid(),
+  athlete_id uuid not null references public.athletes (id) on delete cascade,
+  label text not null,
+  value text,
+  created_by uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index athlete_custom_fields_athlete_id_idx on public.athlete_custom_fields (athlete_id);
+
+create trigger athlete_custom_fields_set_updated_at
+  before update on public.athlete_custom_fields
   for each row execute function public.set_updated_at();
 
 -- ----------------------------------------------------------------------------
@@ -286,6 +356,9 @@ alter table public.comments replica identity full;
 alter table public.documents replica identity full;
 alter table public.permissions replica identity full;
 alter table public.meals replica identity full;
+alter table public.athletes replica identity full;
+alter table public.athlete_meetings replica identity full;
+alter table public.athlete_custom_fields replica identity full;
 
 -- ============================================================================
 -- Auth sync: create a profile row for every new Supabase Auth user, and
@@ -383,6 +456,8 @@ alter table public.athletes enable row level security;
 alter table public.schedules enable row level security;
 alter table public.permissions enable row level security;
 alter table public.meals enable row level security;
+alter table public.athlete_meetings enable row level security;
+alter table public.athlete_custom_fields enable row level security;
 alter table public.messages enable row level security;
 
 -- profiles: every authenticated coach can see the (small, closed) roster;
@@ -542,6 +617,48 @@ create policy "meals_delete_owner_or_hoofdcoach"
   to authenticated
   using (registered_by = auth.uid() or public.is_hoofdcoach(auth.uid()));
 
+-- athlete_meetings/athlete_custom_fields: same authenticated-read-write,
+-- creator-or-hoofdcoach-delete pattern as the rest of an athlete's profile.
+create policy "athlete_meetings_select_authenticated"
+  on public.athlete_meetings for select
+  to authenticated
+  using (true);
+
+create policy "athlete_meetings_insert_authenticated"
+  on public.athlete_meetings for insert
+  to authenticated
+  with check (true);
+
+create policy "athlete_meetings_update_authenticated"
+  on public.athlete_meetings for update
+  to authenticated
+  using (true);
+
+create policy "athlete_meetings_delete_owner_or_hoofdcoach"
+  on public.athlete_meetings for delete
+  to authenticated
+  using (created_by = auth.uid() or public.is_hoofdcoach(auth.uid()));
+
+create policy "athlete_custom_fields_select_authenticated"
+  on public.athlete_custom_fields for select
+  to authenticated
+  using (true);
+
+create policy "athlete_custom_fields_insert_authenticated"
+  on public.athlete_custom_fields for insert
+  to authenticated
+  with check (true);
+
+create policy "athlete_custom_fields_update_authenticated"
+  on public.athlete_custom_fields for update
+  to authenticated
+  using (true);
+
+create policy "athlete_custom_fields_delete_owner_or_hoofdcoach"
+  on public.athlete_custom_fields for delete
+  to authenticated
+  using (created_by = auth.uid() or public.is_hoofdcoach(auth.uid()));
+
 -- messages (Dug-out Chat): any coach can read/write; only the sender or a
 -- hoofdcoach may edit/delete (moderation).
 create policy "messages_select_authenticated"
@@ -576,6 +693,9 @@ alter publication supabase_realtime add table public.comments;
 alter publication supabase_realtime add table public.documents;
 alter publication supabase_realtime add table public.permissions;
 alter publication supabase_realtime add table public.meals;
+alter publication supabase_realtime add table public.athletes;
+alter publication supabase_realtime add table public.athlete_meetings;
+alter publication supabase_realtime add table public.athlete_custom_fields;
 
 -- ============================================================================
 -- Storage: the 'documents' bucket backing public.documents.file_path.

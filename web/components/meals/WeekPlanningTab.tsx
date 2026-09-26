@@ -12,7 +12,6 @@ import {
   countDay,
   getMealForDay,
   getMondayOf,
-  subjectId,
   toDateStr,
   weekMealDays,
 } from "@/lib/meals";
@@ -132,7 +131,7 @@ export default function WeekPlanningTab({ athletes, plans, exceptions, freeDays 
           fixedAthleteId={cell.athleteId}
           defaultDate={cell.date}
           existing={exceptions.filter(
-            (e) => subjectId(e) === cell.athleteId && e.date_from <= cell.date && (!e.date_to || e.date_to >= cell.date)
+            (e) => e.athlete_id === cell.athleteId && e.date_from <= cell.date && (!e.date_to || e.date_to >= cell.date)
           )}
           onClose={() => setCell(null)}
         />

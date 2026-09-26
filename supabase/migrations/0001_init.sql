@@ -311,85 +311,27 @@ create index permissions_requested_date_idx on public.permissions (requested_dat
 create index permissions_status_idx on public.permissions (status);
 
 -- ----------------------------------------------------------------------------
--- external_athletes / other_students — two extra populations who also eat
--- warme maaltijden but aren't topsport 'athletes': external_athletes are
--- sporters from outside the school's own topsport program, other_students
--- are students who are neither topsport nor external (e.g. from the
--- standalone "Maaltijdplanning" tool's roster). Kept as separate tables
--- rather than folded into 'athletes' since that table's topsport-specific
--- columns (medical_screening_*, boarding_school_name, ...) don't apply —
--- only what meal_plans/meal_exceptions actually need is here. See the
--- polymorphic FK design on meal_plans/meal_exceptions below, which is how
--- all three populations end up in ONE combined Meals overview.
--- ----------------------------------------------------------------------------
-create table public.external_athletes (
-  id uuid primary key default gen_random_uuid(),
-  full_name text not null,
-  class_group text,
-  sport text,
-  external_club text,
-  is_boarding_student boolean not null default false,
-  notes text,
-  is_active boolean not null default true,
-  created_by uuid references public.profiles (id) on delete set null,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create index external_athletes_full_name_idx on public.external_athletes (full_name);
-
-create trigger external_athletes_set_updated_at
-  before update on public.external_athletes
-  for each row execute function public.set_updated_at();
-
-create table public.other_students (
-  id uuid primary key default gen_random_uuid(),
-  full_name text not null,
-  class_group text,
-  is_boarding_student boolean not null default false,
-  notes text,
-  is_active boolean not null default true,
-  created_by uuid references public.profiles (id) on delete set null,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create index other_students_full_name_idx on public.other_students (full_name);
-
-create trigger other_students_set_updated_at
-  before update on public.other_students
-  for each row execute function public.set_updated_at();
-
--- ----------------------------------------------------------------------------
 -- Warme maaltijden — ported 1:1 from the standalone "Maaltijdplanning"
--- HTML tool staff were already using: a weekly RECURRING plan per subject
+-- HTML tool staff were already using: a weekly RECURRING plan per athlete
 -- (which of Mon/Tue/Thu/Fri they eat, and which meal code), versioned over
 -- time rather than overwritten, plus dated EXCEPTIONS (illness, a one-off
 -- extra meal, ...) and school-wide FREE DAYS with no warm meals at all.
--- Nothing here is a per-day row — "does subject X eat on date Y" is always
+-- Nothing here is a per-day row — "does athlete X eat on date Y" is always
 -- DERIVED (free day? → no; exception covering Y? → that code; else → the
 -- plan version in force on Y) exactly like the original tool's getMeal(),
 -- ported to lib/meals.ts on the frontend rather than re-implemented in SQL.
 -- meal_code values throughout: '' (no meal that day), 's' (standaard),
 -- 'v' (vegetarisch), 'gv' (geen varkensvlees).
---
--- A "subject" is exactly one of a topsport athlete, an external athlete, or
--- another student — never more than one, never zero, enforced by the
--- *_exactly_one_subject check constraints below. This lets Weekplanning/
--- Dagexport/Mailing/Maandoverzicht/Wijzigingen show all three populations
--- in one combined view instead of three separate ones.
 -- ----------------------------------------------------------------------------
 
--- meal_plans — one row per (subject, effective_from): the weekly code
+-- meal_plans — one row per (athlete, effective_from): the weekly code
 -- choice in force from that date until the next plan version starts (or
 -- forever, if it's the latest). A new row is inserted for every change
 -- ("Planningswijziging") rather than mutating the old one, so the history
 -- stays intact for the Wijzigingen/audit view.
 create table public.meal_plans (
   id uuid primary key default gen_random_uuid(),
-  athlete_id uuid references public.athletes (id) on delete cascade,
-  external_athlete_id uuid references public.external_athletes (id) on delete cascade,
-  other_student_id uuid references public.other_students (id) on delete cascade,
+  athlete_id uuid not null references public.athletes (id) on delete cascade,
   effective_from date not null,
   monday_code text not null default '',
   tuesday_code text not null default '',
@@ -404,45 +346,22 @@ create table public.meal_plans (
     thursday_code in ('', 's', 'v', 'gv') and
     friday_code in ('', 's', 'v', 'gv')
   ),
-  constraint meal_plans_exactly_one_subject check (
-    (
-      (athlete_id is not null)::int +
-      (external_athlete_id is not null)::int +
-      (other_student_id is not null)::int
-    ) = 1
-  )
+  unique (athlete_id, effective_from)
 );
 
 create index meal_plans_athlete_id_idx on public.meal_plans (athlete_id);
-create index meal_plans_external_athlete_id_idx on public.meal_plans (external_athlete_id);
-create index meal_plans_other_student_id_idx on public.meal_plans (other_student_id);
-
--- One plan version per (subject, effective_from), whichever of the three
--- subject columns is populated — coalesce() stands in for the single
--- subject_id a plain unique(athlete_id, effective_from) could no longer
--- express once athlete_id became just one of three nullable columns.
-create unique index meal_plans_subject_effective_from_key on public.meal_plans (
-  coalesce(athlete_id, external_athlete_id, other_student_id), effective_from
-);
 
 -- meal_exceptions — a dated override on top of the plan: an absence
--- (ziek/afwezig/...), a one-off extra meal ('eenmalige_maaltijd'), or a
--- boarding student present with their own lunch package on a day the
--- internaat itself is closed ('eigen_lunchpakket' — meal_code stays ''
--- so it's automatically excluded from every s/v/gv kitchen count, while
--- the type still lets the UI show that the student is present).
--- Open-ended when date_to is null.
+-- (ziek/afwezig/...) or a one-off extra meal ('eenmalige_maaltijd'),
+-- open-ended when date_to is null.
 create type public.meal_exception_type as enum (
   'ziek', 'afwezig_schoolreis_stage', 'afwezig_andere',
-  'eenmalige_maaltijd', 'stopt_tijdelijk', 'heropstart', 'andere',
-  'eigen_lunchpakket'
+  'eenmalige_maaltijd', 'stopt_tijdelijk', 'heropstart', 'andere'
 );
 
 create table public.meal_exceptions (
   id uuid primary key default gen_random_uuid(),
-  athlete_id uuid references public.athletes (id) on delete cascade,
-  external_athlete_id uuid references public.external_athletes (id) on delete cascade,
-  other_student_id uuid references public.other_students (id) on delete cascade,
+  athlete_id uuid not null references public.athletes (id) on delete cascade,
   exception_type public.meal_exception_type not null,
   meal_code text not null default '',
   date_from date not null,
@@ -451,19 +370,10 @@ create table public.meal_exceptions (
   registered_by uuid references public.profiles (id) on delete set null,
   created_at timestamptz not null default now(),
   constraint meal_exceptions_code_check check (meal_code in ('', 's', 'v', 'gv')),
-  constraint meal_exceptions_date_range_check check (date_to is null or date_to >= date_from),
-  constraint meal_exceptions_exactly_one_subject check (
-    (
-      (athlete_id is not null)::int +
-      (external_athlete_id is not null)::int +
-      (other_student_id is not null)::int
-    ) = 1
-  )
+  constraint meal_exceptions_date_range_check check (date_to is null or date_to >= date_from)
 );
 
 create index meal_exceptions_athlete_id_idx on public.meal_exceptions (athlete_id);
-create index meal_exceptions_external_athlete_id_idx on public.meal_exceptions (external_athlete_id);
-create index meal_exceptions_other_student_id_idx on public.meal_exceptions (other_student_id);
 create index meal_exceptions_date_from_idx on public.meal_exceptions (date_from);
 
 -- meal_free_days — school-wide days with no warm meals offered at all
@@ -601,8 +511,6 @@ alter table public.invitations enable row level security;
 alter table public.documents enable row level security;
 alter table public.comments enable row level security;
 alter table public.athletes enable row level security;
-alter table public.external_athletes enable row level security;
-alter table public.other_students enable row level security;
 alter table public.schedules enable row level security;
 alter table public.permissions enable row level security;
 alter table public.meal_plans enable row level security;
@@ -706,48 +614,6 @@ create policy "athletes_update_authenticated"
 
 create policy "athletes_delete_owner_or_hoofdcoach"
   on public.athletes for delete
-  to authenticated
-  using (created_by = auth.uid() or public.is_hoofdcoach(auth.uid()));
-
--- external_athletes/other_students: same authenticated-read-write,
--- creator-or-hoofdcoach-delete pattern as athletes.
-create policy "external_athletes_select_authenticated"
-  on public.external_athletes for select
-  to authenticated
-  using (true);
-
-create policy "external_athletes_insert_authenticated"
-  on public.external_athletes for insert
-  to authenticated
-  with check (true);
-
-create policy "external_athletes_update_authenticated"
-  on public.external_athletes for update
-  to authenticated
-  using (true);
-
-create policy "external_athletes_delete_owner_or_hoofdcoach"
-  on public.external_athletes for delete
-  to authenticated
-  using (created_by = auth.uid() or public.is_hoofdcoach(auth.uid()));
-
-create policy "other_students_select_authenticated"
-  on public.other_students for select
-  to authenticated
-  using (true);
-
-create policy "other_students_insert_authenticated"
-  on public.other_students for insert
-  to authenticated
-  with check (true);
-
-create policy "other_students_update_authenticated"
-  on public.other_students for update
-  to authenticated
-  using (true);
-
-create policy "other_students_delete_owner_or_hoofdcoach"
-  on public.other_students for delete
   to authenticated
   using (created_by = auth.uid() or public.is_hoofdcoach(auth.uid()));
 
@@ -930,8 +796,6 @@ alter publication supabase_realtime add table public.meal_plans;
 alter publication supabase_realtime add table public.meal_exceptions;
 alter publication supabase_realtime add table public.meal_free_days;
 alter publication supabase_realtime add table public.athletes;
-alter publication supabase_realtime add table public.external_athletes;
-alter publication supabase_realtime add table public.other_students;
 alter publication supabase_realtime add table public.athlete_meetings;
 alter publication supabase_realtime add table public.athlete_custom_fields;
 
@@ -965,58 +829,3 @@ create policy "documents_bucket_delete_owner_or_hoofdcoach"
   on storage.objects for delete
   to authenticated
   using (bucket_id = 'documents' and (owner = auth.uid() or public.is_hoofdcoach(auth.uid())));
-
--- ============================================================================
--- Seed data: the standalone "Maaltijdplanning" HTML tool's roster + its
--- initial weekly plan (2026-09-01, "Start schooljaar") — NOT that tool's
--- exception/absence history, which lived only in its own browser
--- localStorage/linked OneDrive file and was never exported, so staff will
--- re-enter that part by hand. Imported once so this platform's Meals
--- module can fully replace the standalone tool going forward.
--- ============================================================================
-with roster (full_name, class_group, monday_code, tuesday_code, thursday_code, friday_code) as (
-  values
-    ('Mats Peeters', '4TNWEa', 's', 's', 's', 's'),
-    ('Leander Van der Meijden', '5TSEa', 's', 's', 's', 's'),
-    ('Yari Vanderhallen', '6TSEa', 's', 's', 's', 's'),
-    ('Yassine Labidi', '4TSa', 's', 's', 'gv', 's'),
-    ('Maxime Broux', '4TNWEa', 's', 's', 's', ''),
-    ('Mattia Noviello', '4TSPa', 's', 's', 's', ''),
-    ('Ronas Corlu', '5TSa', 's', 's', 's', 's'),
-    ('Joppe Geenen', '3TNWEa', 's', 's', 's', 's'),
-    ('Nathan Rosius', '4TSPa', 's', 's', 's', 's'),
-    ('Noah Vandeweyer', '3TSEa', 's', 's', 's', ''),
-    ('Lander Tielens', '3TNWEa', 's', 's', 's', 's'),
-    ('Jens De Groof', '6TSWEa', 's', 's', 's', 's'),
-    ('Aras Ayaz', '3TEa', '', 'gv', 'gv', ''),
-    ('Cristian Strollo', '4TNWEa', 's', '', 's', ''),
-    ('Matteo De Notarpietro', '4TNWEa', 's', 's', 's', ''),
-    ('Sid Reekmans', '3TSEa', 's', 's', 's', 's'),
-    ('Maxime Buekers', '6TSEa', 's', 's', 's', 's'),
-    ('Victor Buekers', '3TSEa', 's', 's', 's', 's'),
-    ('Warre Lantin', '3TNWEa', 's', 's', 's', 's'),
-    ('Joseph Ganne', '4TNWEa', 's', 's', 's', 's'),
-    ('Laurens Eerdekens', '3SWEWIa', 's', 's', 's', 's'),
-    ('Emil Vanschoenwinkel', '4TSa', 's', 's', 's', 's'),
-    ('Amara Konstantinidis', '5SWEb', 's', 's', '', 's'),
-    ('Renske Kelgtermans', '5SWEb', 's', 's', '', 's'),
-    ('Lars Roemers', '4TNWEa', 's', 's', 's', 's'),
-    ('Zabon Chukwuemeka', '3TEa', 's', 's', 's', 's'),
-    ('Albert Tourment', '3TNWEa', 's', 's', 's', 's'),
-    ('Julie Wouters', '5WEWIa', 's', '', '', 's')
-),
-inserted_students as (
-  insert into public.other_students (full_name, class_group, is_boarding_student, is_active)
-  select full_name, class_group, false, true from roster
-  returning id, full_name
-)
-insert into public.meal_plans (other_student_id, effective_from, monday_code, tuesday_code, thursday_code, friday_code, reason)
-select s.id, '2026-09-01', r.monday_code, r.tuesday_code, r.thursday_code, r.friday_code, 'Start schooljaar'
-from inserted_students s
-join roster r using (full_name);
-
-insert into public.meal_free_days (free_date, description)
-values
-  ('2026-09-01', 'Opstart warme maaltijden'),
-  ('2026-09-02', 'Opstart warme maaltijden')
-on conflict (free_date) do nothing;

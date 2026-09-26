@@ -7,12 +7,10 @@ const TODAY = toDateStr(new Date());
 async function getKpis() {
   const supabase = await createClient();
 
-  const [athletes, mealAthletes, mealExternalAthletes, mealOtherStudents, mealPlansToday, mealExceptionsToday, mealFreeDays, pendingPermissions, upcomingPermissions] =
+  const [athletes, mealAthletes, mealPlansToday, mealExceptionsToday, mealFreeDays, pendingPermissions, upcomingPermissions] =
     await Promise.all([
       supabase.from("athletes").select("id", { count: "exact", head: true }).eq("is_active", true),
       supabase.from("athletes").select("id").eq("is_active", true).eq("is_boarding_student", false),
-      supabase.from("external_athletes").select("id").eq("is_active", true).eq("is_boarding_student", false),
-      supabase.from("other_students").select("id").eq("is_active", true).eq("is_boarding_student", false),
       supabase.from("meal_plans").select("*").lte("effective_from", TODAY),
       supabase
         .from("meal_exceptions")
@@ -30,11 +28,7 @@ async function getKpis() {
     ]);
 
   const mealsTodayCount = countDay(
-    [
-      ...(mealAthletes.data ?? []).map((a) => a.id),
-      ...(mealExternalAthletes.data ?? []).map((a) => a.id),
-      ...(mealOtherStudents.data ?? []).map((a) => a.id),
-    ],
+    (mealAthletes.data ?? []).map((a) => a.id),
     TODAY,
     mealPlansToday.data ?? [],
     mealExceptionsToday.data ?? [],

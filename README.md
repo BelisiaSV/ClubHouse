@@ -1,5 +1,13 @@
 # ClubHouse — Whitelabel Voetbal-SaaS Platform
 
+> **The TopsportSpace — Performance Desk** (`web/` + `supabase/`) is a separate, newer
+> product living in this same repo: a closed Next.js + Supabase "operations dashboard" for
+> two Topsport Directors and their staff, managing student-athletes' schedules,
+> permissions, meals and documents (no student logins, no multi-tenancy) — see
+> `web/README.md` and `supabase/migrations/`. Everything below describes the original
+> FastAPI/React ClubHouse app in `backend/` and `frontend/`, which is unrelated and
+> untouched by that work.
+
 Monorepo: FastAPI + SQLAlchemy + Alembic backend (PostgreSQL), React + Tailwind frontend.
 Multi-tenant: each club registers its own coach login and gets a fully whitelabeled
 environment (name, logo, colors) with its own players, isolated from every other club.

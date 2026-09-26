@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import ExceptionDialog, { type AthleteLite } from "./ExceptionDialog";
 import MealPill from "./MealPill";
-import type { MealException, MealFreeDay } from "@/lib/meals";
+import { subjectId, type MealException, type MealFreeDay } from "@/lib/meals";
 
 interface ExceptionsTabProps {
   athletes: AthleteLite[];
@@ -21,6 +21,7 @@ const TYPE_LABEL: Record<string, string> = {
   stopt_tijdelijk: "Stopt tijdelijk",
   heropstart: "Heropstart",
   andere: "Andere",
+  eigen_lunchpakket: "Eigen lunchpakket (internaat gesloten)",
 };
 
 export default function ExceptionsTab({ athletes, exceptions, freeDays }: ExceptionsTabProps) {
@@ -98,7 +99,7 @@ export default function ExceptionsTab({ athletes, exceptions, freeDays }: Except
                   .sort((a, b) => b.date_from.localeCompare(a.date_from))
                   .map((exc) => (
                     <tr key={exc.id}>
-                      <td className="px-4 py-2.5 text-gray-100">{athleteNameById.get(exc.athlete_id) ?? "—"}</td>
+                      <td className="px-4 py-2.5 text-gray-100">{athleteNameById.get(subjectId(exc)) ?? "—"}</td>
                       <td className="px-4 py-2.5 text-gray-400">{TYPE_LABEL[exc.exception_type] ?? exc.exception_type}</td>
                       <td className="px-4 py-2.5 text-gray-400">{exc.date_from}</td>
                       <td className="px-4 py-2.5 text-gray-500">{exc.date_to && exc.date_to !== exc.date_from ? exc.date_to : "—"}</td>

@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import MealPill from "./MealPill";
 import type { AthleteLite } from "./ExceptionDialog";
-import type { MealException, MealPlan } from "@/lib/meals";
+import { subjectId, type MealException, type MealPlan } from "@/lib/meals";
 
 interface ChangeLogTabProps {
   athletes: AthleteLite[];
@@ -19,6 +19,7 @@ const EXCEPTION_LABEL: Record<string, string> = {
   stopt_tijdelijk: "Stopt tijdelijk",
   heropstart: "Heropstart",
   andere: "Andere",
+  eigen_lunchpakket: "Eigen lunchpakket (internaat gesloten)",
 };
 
 type ChangeRow =
@@ -34,7 +35,7 @@ export default function ChangeLogTab({ athletes, plans, exceptions }: ChangeLogT
       kind: "plan",
       date: p.effective_from,
       sortKey: p.created_at,
-      athleteId: p.athlete_id,
+      athleteId: subjectId(p),
       reason: p.reason,
       plan: p,
     }));
@@ -42,7 +43,7 @@ export default function ChangeLogTab({ athletes, plans, exceptions }: ChangeLogT
       kind: "exception",
       date: e.date_from,
       sortKey: e.created_at,
-      athleteId: e.athlete_id,
+      athleteId: subjectId(e),
       reason: e.note,
       exception: e,
     }));

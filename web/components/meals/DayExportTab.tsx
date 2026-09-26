@@ -3,17 +3,18 @@
 import { useMemo, useState } from "react";
 import MealPill from "./MealPill";
 import type { AthleteLite } from "./ExceptionDialog";
-import { MEAL_WEEKDAYS, type MealException, type MealFreeDay, type MealPlan, fromDateStr, getMealForDay, isFreeDay, toDateStr } from "@/lib/meals";
+import { MEAL_WEEKDAYS, type MealException, type MealFreeDay, type MealPlan, fromDateStr, getActiveException, isFreeDay, getMealForDay, toDateStr } from "@/lib/meals";
 
 interface DayExportTabProps {
   athletes: AthleteLite[];
+  boardingSubjects: AthleteLite[];
   plans: MealPlan[];
   exceptions: MealException[];
   freeDays: MealFreeDay[];
 }
 
 /** The kitchen-facing list for one day: who eats, and what. */
-export default function DayExportTab({ athletes, plans, exceptions, freeDays }: DayExportTabProps) {
+export default function DayExportTab({ athletes, boardingSubjects, plans, exceptions, freeDays }: DayExportTabProps) {
   const [dateStr, setDateStr] = useState(() => toDateStr(new Date()));
 
   const dayOfWeek = fromDateStr(dateStr).getDay();
@@ -27,6 +28,16 @@ export default function DayExportTab({ athletes, plans, exceptions, freeDays }: 
       .filter((r) => r.code)
       .sort((a, b) => `${a.athlete.class_group ?? ""}${a.athlete.full_name}`.localeCompare(`${b.athlete.class_group ?? ""}${b.athlete.full_name}`));
   }, [athletes, dateStr, plans, exceptions, freeDays, isSchoolMealDay, vrij]);
+
+  // Boarding students present today with their own lunch package (internaat
+  // closed) — purely informational for staff, never part of the s/v/gv/
+  // totaal counts below, since they don't eat the kitchen's warm meal.
+  const lunchpakketRows = useMemo(() => {
+    if (!isSchoolMealDay || vrij) return [];
+    return boardingSubjects
+      .filter((subject) => getActiveException(exceptions, subject.id, dateStr)?.exception_type === "eigen_lunchpakket")
+      .sort((a, b) => `${a.class_group ?? ""}${a.full_name}`.localeCompare(`${b.class_group ?? ""}${b.full_name}`));
+  }, [boardingSubjects, dateStr, exceptions, isSchoolMealDay, vrij]);
 
   const counts = { s: rows.filter((r) => r.code === "s").length, v: rows.filter((r) => r.code === "v").length, gv: rows.filter((r) => r.code === "gv").length };
 
@@ -104,6 +115,28 @@ export default function DayExportTab({ athletes, plans, exceptions, freeDays }: 
               </tbody>
             </table>
           )}
+        </div>
+      )}
+
+      {isSchoolMealDay && !vrij && lunchpakketRows.length > 0 && (
+        <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 shadow-xl shadow-black/20">
+          <div className="border-b border-amber-500/20 px-5 py-3">
+            <p className="text-sm font-semibold text-amber-300">Eigen lunchpakket (internaat gesloten)</p>
+            <p className="text-xs text-amber-300/70">
+              Aanwezig vandaag met eigen lunchpakket — niet meegeteld in de aantallen hierboven.
+            </p>
+          </div>
+          <table className="w-full text-left text-sm">
+            <tbody className="divide-y divide-white/5">
+              {lunchpakketRows.map((subject, i) => (
+                <tr key={subject.id}>
+                  <td className="px-4 py-2 text-gray-600">{i + 1}</td>
+                  <td className="px-4 py-2 text-gray-100">{subject.full_name}</td>
+                  <td className="px-4 py-2 text-gray-500">{subject.class_group ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

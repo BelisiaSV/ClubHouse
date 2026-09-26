@@ -18,7 +18,8 @@ export type MealExceptionType =
   | "eenmalige_maaltijd"
   | "stopt_tijdelijk"
   | "heropstart"
-  | "andere";
+  | "andere"
+  | "eigen_lunchpakket";
 
 export interface Database {
   public: {
@@ -351,10 +352,84 @@ export interface Database {
         };
         Relationships: [];
       };
+      external_athletes: {
+        Row: {
+          id: string;
+          full_name: string;
+          class_group: string | null;
+          sport: string | null;
+          external_club: string | null;
+          is_boarding_student: boolean;
+          notes: string | null;
+          is_active: boolean;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          full_name: string;
+          class_group?: string | null;
+          sport?: string | null;
+          external_club?: string | null;
+          is_boarding_student?: boolean;
+          notes?: string | null;
+          is_active?: boolean;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          full_name?: string;
+          class_group?: string | null;
+          sport?: string | null;
+          external_club?: string | null;
+          is_boarding_student?: boolean;
+          notes?: string | null;
+          is_active?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      other_students: {
+        Row: {
+          id: string;
+          full_name: string;
+          class_group: string | null;
+          is_boarding_student: boolean;
+          notes: string | null;
+          is_active: boolean;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          full_name: string;
+          class_group?: string | null;
+          is_boarding_student?: boolean;
+          notes?: string | null;
+          is_active?: boolean;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          full_name?: string;
+          class_group?: string | null;
+          is_boarding_student?: boolean;
+          notes?: string | null;
+          is_active?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       meal_plans: {
         Row: {
           id: string;
-          athlete_id: string;
+          athlete_id: string | null;
+          external_athlete_id: string | null;
+          other_student_id: string | null;
           effective_from: string;
           monday_code: MealCode;
           tuesday_code: MealCode;
@@ -366,7 +441,9 @@ export interface Database {
         };
         Insert: {
           id?: string;
-          athlete_id: string;
+          athlete_id?: string | null;
+          external_athlete_id?: string | null;
+          other_student_id?: string | null;
           effective_from: string;
           monday_code?: MealCode;
           tuesday_code?: MealCode;
@@ -388,7 +465,9 @@ export interface Database {
       meal_exceptions: {
         Row: {
           id: string;
-          athlete_id: string;
+          athlete_id: string | null;
+          external_athlete_id: string | null;
+          other_student_id: string | null;
           exception_type: MealExceptionType;
           meal_code: MealCode;
           date_from: string;
@@ -399,7 +478,9 @@ export interface Database {
         };
         Insert: {
           id?: string;
-          athlete_id: string;
+          athlete_id?: string | null;
+          external_athlete_id?: string | null;
+          other_student_id?: string | null;
           exception_type: MealExceptionType;
           meal_code?: MealCode;
           date_from: string;

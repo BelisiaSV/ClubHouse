@@ -6,10 +6,13 @@ import { createClient } from "@/lib/supabase/client";
 import type { MealCode, MealExceptionType } from "@/types/database";
 import type { MealException } from "@/lib/meals";
 
+export type SubjectKind = "athlete" | "external_athlete" | "other_student";
+
 export interface AthleteLite {
   id: string;
   full_name: string;
   class_group: string | null;
+  kind: SubjectKind;
 }
 
 interface ExceptionDialogProps {
@@ -28,6 +31,7 @@ const TYPE_OPTIONS: { value: MealExceptionType; label: string }[] = [
   { value: "stopt_tijdelijk", label: "Stopt tijdelijk" },
   { value: "heropstart", label: "Heropstart" },
   { value: "andere", label: "Andere" },
+  { value: "eigen_lunchpakket", label: "Eigen lunchpakket (internaat gesloten)" },
 ];
 
 const CODE_OPTIONS: { value: MealCode; label: string }[] = [
@@ -60,13 +64,18 @@ export default function ExceptionDialog({ athletes, fixedAthleteId, defaultDate,
     setSubmitting(true);
     setError(null);
 
+    const subject = fixedAthlete ?? athletes.find((a) => a.id === athleteId);
+    if (!subject) return;
+
     const supabase = createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
     const { error: insertError } = await supabase.from("meal_exceptions").insert({
-      athlete_id: athleteId,
+      athlete_id: subject.kind === "athlete" ? subject.id : null,
+      external_athlete_id: subject.kind === "external_athlete" ? subject.id : null,
+      other_student_id: subject.kind === "other_student" ? subject.id : null,
       exception_type: exceptionType,
       meal_code: mealCode,
       date_from: dateFrom,

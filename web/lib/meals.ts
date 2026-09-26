@@ -65,22 +65,9 @@ export function isFreeDay(dateStr: string, freeDays: MealFreeDay[]): boolean {
   return freeDays.some((f) => f.free_date === dateStr);
 }
 
-/**
- * A meal_plans/meal_exceptions row's subject — exactly one of athlete_id/
- * external_athlete_id/other_student_id is set (enforced in the DB by the
- * *_exactly_one_subject check constraints) so this is always non-null for
- * a real row. `athleteId` throughout this file is really this opaque
- * subject id, shared across all three populations (topsport athletes,
- * external athletes, other students) so the derivation logic below never
- * needs to know which one it's looking at.
- */
-export function subjectId(row: { athlete_id: string | null; external_athlete_id: string | null; other_student_id: string | null }): string {
-  return (row.athlete_id ?? row.external_athlete_id ?? row.other_student_id)!;
-}
-
 /** The plan version in force on `dateStr` — the latest one whose effective_from is on or before it. */
 export function getActivePlan(plans: MealPlan[], athleteId: string, dateStr: string): MealPlan | null {
-  const applicable = plans.filter((p) => subjectId(p) === athleteId && p.effective_from <= dateStr);
+  const applicable = plans.filter((p) => p.athlete_id === athleteId && p.effective_from <= dateStr);
   if (applicable.length === 0) return null;
   return applicable.reduce((latest, p) => (p.effective_from > latest.effective_from ? p : latest));
 }
@@ -88,7 +75,7 @@ export function getActivePlan(plans: MealPlan[], athleteId: string, dateStr: str
 /** The exception in force on `dateStr` (open-ended when date_to is null), most recent match wins. */
 export function getActiveException(exceptions: MealException[], athleteId: string, dateStr: string): MealException | null {
   const applicable = exceptions
-    .filter((e) => subjectId(e) === athleteId && e.date_from <= dateStr && (!e.date_to || e.date_to >= dateStr))
+    .filter((e) => e.athlete_id === athleteId && e.date_from <= dateStr && (!e.date_to || e.date_to >= dateStr))
     .sort((a, b) => b.date_from.localeCompare(a.date_from));
   return applicable[0] ?? null;
 }
